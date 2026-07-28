@@ -6,9 +6,9 @@ import multer from 'multer';
 import * as XLSX from 'xlsx';
 import dotenv from 'dotenv';
 
-import { db, loadFromFirestore, saveToFirestore, forceEmptyAndLoaded, firestoreStatus, lastDbError, rawRowsLoaded, ensureRawRowsLoaded, migrateAndCleanZones } from './server/db.ts';
+import { db, loadFromTurso, saveToTurso, forceEmptyAndLoaded, dbStatus, lastDbError, rawRowsLoaded, ensureRawRowsLoaded, migrateAndCleanZones } from './server/db.ts';
 import { processShipTaxFile, processCourierFile, processCustomerReportFile } from './server/uploadHandler.ts';
-import { syncFirestoreToLocal, syncLocalToFirestore } from './server/firebase.ts';
+import { syncFirestoreToLocal, syncLocalToFirestore } from './server/turso.ts';
 import { parseExcelDate, isDHLDuty, isFedExDuty, parseFileBuffer } from './server/parsers.ts';
 import { parseDhl, parseGeneric, normalizeCountry, extractCountryCode } from './server/rateParser.ts';
 import { compareCourierRates } from './server/services/rateComparisonService.ts';
@@ -46,14 +46,14 @@ export async function createExpressApp() {
   // API Routes
   // -----------------------------------------------------------------
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', firestoreStatus });
+    res.json({ status: 'ok', dbStatus });
   });
 
   // Force Synchronization with Turso Cloud
   app.post('/api/sync', async (req, res) => {
     try {
       console.log('[API] Triggering manual cloud pull sync...');
-      await loadFromFirestore(true);
+      await loadFromTurso(true);
       res.json({ success: true, message: 'Local database fully synchronized with Turso Cloud!' });
     } catch (err: any) {
       console.error('[API SYNC ERROR]', err);
@@ -64,7 +64,7 @@ export async function createExpressApp() {
   // Get Database Connection & Fallback Status
   app.get('/api/db-status', (req, res) => {
     res.json({
-      status: firestoreStatus,
+      status: dbStatus,
       error: lastDbError,
       rawLoaded: rawRowsLoaded
     });
@@ -119,8 +119,8 @@ export async function createExpressApp() {
   // Get summary of database metrics
   app.get('/api/summary', async (req, res) => {
     try {
-      await loadFromFirestore(false, ['summary_stats']);
-      if (firestoreStatus === 'Data not loaded') {
+      await loadFromTurso(false, ['summary_stats']);
+      if (dbStatus === 'Data not loaded') {
         return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded. Do not trust totals until this is fixed.' });
       }
       const stats = db.prepare('SELECT * FROM summary_stats LIMIT 1').get() as any;
@@ -142,8 +142,8 @@ export async function createExpressApp() {
   // Get Datewise Duty Summaries
   app.get('/api/datewise', async (req, res) => {
     try {
-      await loadFromFirestore(false, ['datewise_summary']);
-      if (firestoreStatus === 'Data not loaded') {
+      await loadFromTurso(false, ['datewise_summary']);
+      if (dbStatus === 'Data not loaded') {
         return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded. Do not trust totals until this is fixed.' });
       }
       const rows = db.prepare('SELECT * FROM datewise_summary ORDER BY ship_date DESC, courier ASC').all() as any[];
@@ -156,8 +156,8 @@ export async function createExpressApp() {
   // Get Double Billing reports
   app.get('/api/double', async (req, res) => {
     try {
-      await loadFromFirestore(false, ['double_billing']);
-      if (firestoreStatus === 'Data not loaded') {
+      await loadFromTurso(false, ['double_billing']);
+      if (dbStatus === 'Data not loaded') {
         return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded. Do not trust totals until this is fixed.' });
       }
       const rows = db.prepare('SELECT * FROM double_billing ORDER BY created_at DESC').all() as any[];
@@ -170,8 +170,8 @@ export async function createExpressApp() {
   // Get ShipTax Ledger
   app.get('/api/memory', async (req, res) => {
     try {
-      await loadFromFirestore(false, ['shiptax']);
-      if (firestoreStatus === 'Data not loaded') {
+      await loadFromTurso(false, ['shiptax']);
+      if (dbStatus === 'Data not loaded') {
         return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded. Do not trust totals until this is fixed.' });
       }
       const awb = req.query.awb ? String(req.query.awb).trim() : '';
@@ -188,8 +188,8 @@ export async function createExpressApp() {
   // Get review / warning logs
   app.get('/api/review', async (req, res) => {
     try {
-      await loadFromFirestore(false, ['review']);
-      if (firestoreStatus === 'Data not loaded') {
+      await loadFromTurso(false, ['review']);
+      if (dbStatus === 'Data not loaded') {
         return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded. Do not trust totals until this is fixed.' });
       }
       const rows = db.prepare('SELECT * FROM review ORDER BY created_at DESC').all() as any[];
@@ -216,7 +216,7 @@ export async function createExpressApp() {
   // Upload ShipTax Ledger File(s)
   app.post('/api/upload/shiptax', upload.array('files'), async (req, res) => {
     try {
-      await loadFromFirestore(false, ['shiptax', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'charges']);
+      await loadFromTurso(false, ['shiptax', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'charges']);
       const files = req.files as Express.Multer.File[];
       if (!files || files.length === 0) {
         return res.status(400).json({ error: 'No files uploaded' });
@@ -252,7 +252,7 @@ export async function createExpressApp() {
       }
       
       // Sync local changes to cloud database in the background
-      saveToFirestore(['shiptax', 'review', 'uploads', 'summary_stats', 'datewise_summary']).catch(err => {
+      saveToTurso(['shiptax', 'review', 'uploads', 'summary_stats', 'datewise_summary']).catch(err => {
         console.error('[BACKGROUND TURSO SYNC ERROR - ShipTax]', err);
       });
       
@@ -274,7 +274,7 @@ export async function createExpressApp() {
   // Upload Courier Invoice File(s)
   app.post('/api/upload/courier', upload.array('files'), async (req, res) => {
     try {
-      await loadFromFirestore(false, ['charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'shiptax']);
+      await loadFromTurso(false, ['charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'shiptax']);
       const files = req.files as Express.Multer.File[];
       const courier = req.body.courier || 'AUTO';
       const chargeMonth = req.body.charge_month || req.body.targetMonth || '';
@@ -318,7 +318,7 @@ export async function createExpressApp() {
       }
       
       // Sync local changes to cloud database in the background
-      saveToFirestore(['charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary']).catch(err => {
+      saveToTurso(['charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary']).catch(err => {
         console.error('[BACKGROUND TURSO SYNC ERROR - Courier]', err);
       });
       
@@ -340,7 +340,7 @@ export async function createExpressApp() {
    // Upload Customer FOB Report File(s)
    app.post('/api/upload/fob', upload.array('files'), async (req, res) => {
      try {
-       await loadFromFirestore(false, ['customer_fob', 'uploads', 'review']);
+       await loadFromTurso(false, ['customer_fob', 'uploads', 'review']);
        const files = req.files as Express.Multer.File[];
        if (!files || files.length === 0) {
          return res.status(400).json({ error: 'No files uploaded' });
@@ -381,7 +381,7 @@ export async function createExpressApp() {
        }
        
        // Sync local changes to cloud database in the background
-       saveToFirestore(['customer_fob', 'uploads', 'review']).catch(err => {
+       saveToTurso(['customer_fob', 'uploads', 'review']).catch(err => {
          console.error('[BACKGROUND TURSO SYNC ERROR - FOB]', err);
        });
        
@@ -466,13 +466,13 @@ export async function createExpressApp() {
       );
 
       // Sync to remote Turso
-      await saveToFirestore(['courier_zones', 'courier_rates', 'uploads']);
+      await saveToTurso(['courier_zones', 'courier_rates', 'uploads']);
     }
 
     // Get surcharge settings for all couriers
     app.get('/api/rates/settings', async (req, res) => {
       try {
-        await loadFromFirestore(false, ['courier_settings']);
+        await loadFromTurso(false, ['courier_settings']);
         const rows = db.prepare('SELECT * FROM courier_settings').all() as any[];
         res.json(rows);
       } catch (err: any) {
@@ -483,7 +483,7 @@ export async function createExpressApp() {
     // Save/update settings
     app.post('/api/rates/settings', async (req, res) => {
       try {
-        await loadFromFirestore(false, ['courier_settings']);
+        await loadFromTurso(false, ['courier_settings']);
         const { settings } = req.body;
         if (!settings || !Array.isArray(settings)) {
           return res.status(400).json({ error: 'Invalid settings payload' });
@@ -497,7 +497,7 @@ export async function createExpressApp() {
             stmt.run(s.courier, s.fuel_surcharge, s.gst, s.other_surcharge);
           }
         })();
-        await saveToFirestore(['courier_settings']);
+        await saveToTurso(['courier_settings']);
         res.json({ success: true });
       } catch (err: any) {
         res.status(500).json({ error: err.message });
@@ -507,7 +507,7 @@ export async function createExpressApp() {
     // Get list of unique countries from country_master
     app.get('/api/rates/countries', async (req, res) => {
       try {
-        await loadFromFirestore(false, ['country_master']);
+        await loadFromTurso(false, ['country_master']);
         const rows = db.prepare('SELECT country_name FROM country_master WHERE is_active = 1 ORDER BY country_name ASC').all() as any[];
         const list = rows.map(r => r.country_name);
         res.json(list);
@@ -519,7 +519,7 @@ export async function createExpressApp() {
     // Get active countries details from country_master
     app.get('/api/countries', async (req, res) => {
       try {
-        await loadFromFirestore(false, ['country_master']);
+        await loadFromTurso(false, ['country_master']);
         const rows = db.prepare('SELECT country_code, country_name, iso3_code FROM country_master WHERE is_active = 1 ORDER BY country_name ASC').all() as any[];
         res.json(rows);
       } catch (err: any) {
@@ -530,7 +530,7 @@ export async function createExpressApp() {
     // Get summary of rate uploads
     app.get('/api/rates/summary', async (req, res) => {
       try {
-        await loadFromFirestore(false, ['courier_zones', 'courier_rates', 'uploads']);
+        await loadFromTurso(false, ['courier_zones', 'courier_rates', 'uploads']);
         const couriers = ['DHL', 'FedEx', 'UPS'];
         const summaryList = [];
 
@@ -569,7 +569,7 @@ export async function createExpressApp() {
     // Upload Rate charts
     app.post('/api/upload/rates', upload.single('file'), async (req, res) => {
       try {
-        await loadFromFirestore(false, ['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
+        await loadFromTurso(false, ['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
         const { courier, confirmDhlDetection } = req.body;
         const file = req.file;
         if (!file) {
@@ -636,7 +636,7 @@ export async function createExpressApp() {
           return res.status(400).json({ error: registerResult.message });
         }
 
-        await saveToFirestore(['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
+        await saveToTurso(['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
 
         res.json({
           success: true,
@@ -655,7 +655,7 @@ export async function createExpressApp() {
     // Upload manual mapped Custom Rates
     app.post('/api/upload/rates/custom', upload.single('file'), async (req, res) => {
       try {
-        await loadFromFirestore(false, ['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
+        await loadFromTurso(false, ['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
         const { courier, mappingJson } = req.body;
         const file = req.file;
         if (!file) {
@@ -693,7 +693,7 @@ export async function createExpressApp() {
           return res.status(400).json({ error: registerResult.message });
         }
 
-        await saveToFirestore(['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
+        await saveToTurso(['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
 
         res.json({
           success: true,
@@ -712,7 +712,7 @@ export async function createExpressApp() {
     // Compare Rates Engine
     app.post('/api/rates/compare', async (req, res) => {
       try {
-        await loadFromFirestore(false, ['courier_zones', 'courier_rates', 'rate_packages']);
+        await loadFromTurso(false, ['courier_zones', 'courier_rates', 'rate_packages']);
         const { country, weight: rawWeight, shipmentType, length, width, height, service, direction } = req.body;
 
         if (!country) {
@@ -744,7 +744,7 @@ export async function createExpressApp() {
     // Diagnostic Audit Suite API
     app.get('/api/rates/diagnostics', async (req, res) => {
       try {
-        await loadFromFirestore(false, ['courier_zones', 'courier_rates', 'rate_packages']);
+        await loadFromTurso(false, ['courier_zones', 'courier_rates', 'rate_packages']);
         const results = runAutomatedRateDiagnostics();
         res.json(results);
       } catch (err: any) {
@@ -755,7 +755,7 @@ export async function createExpressApp() {
     // Get Active Packages
     app.get('/api/rates/packages', async (req, res) => {
       try {
-        await loadFromFirestore(false, ['rate_packages']);
+        await loadFromTurso(false, ['rate_packages']);
         const packages = getRatePackages();
         res.json(packages);
       } catch (err: any) {
@@ -766,9 +766,9 @@ export async function createExpressApp() {
     // Reset Rate Comparator Subsystem
     app.post('/api/rates/reset', async (req, res) => {
       try {
-        await loadFromFirestore(false, ['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
+        await loadFromTurso(false, ['courier_zones', 'courier_rates', 'rate_packages', 'uploads']);
         const result = resetCourierRatesSubsystem();
-        await saveToFirestore(['courier_zones', 'courier_rates', 'rate_packages', 'uploads']); // Sync reset state to Turso
+        await saveToTurso(['courier_zones', 'courier_rates', 'rate_packages', 'uploads']); // Sync reset state to Turso
         res.json(result);
       } catch (err: any) {
         res.status(500).json({ error: err.message });
@@ -779,8 +779,8 @@ export async function createExpressApp() {
 
     app.get('/api/fob-percentage-report', async (req, res) => {
      try {
-       await loadFromFirestore(false, ['charges', 'customer_fob', 'shiptax']);
-       if (firestoreStatus === 'Data not loaded') {
+       await loadFromTurso(false, ['charges', 'customer_fob', 'shiptax']);
+       if (dbStatus === 'Data not loaded') {
          return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded.' });
        }
        
@@ -921,8 +921,8 @@ export async function createExpressApp() {
 
     app.get('/api/customer-fob', async (req, res) => {
      try {
-       await loadFromFirestore(false, ['customer_fob']);
-       if (firestoreStatus === 'Data not loaded') {
+       await loadFromTurso(false, ['customer_fob']);
+       if (dbStatus === 'Data not loaded') {
          return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded.' });
        }
        const fobs = db.prepare('SELECT * FROM customer_fob WHERE awb = original_awb ORDER BY created_at DESC').all() as any[];
@@ -935,8 +935,8 @@ export async function createExpressApp() {
   // Export full Excel report
   app.get('/api/export.xlsx', async (req, res) => {
     try {
-      await loadFromFirestore(false, ['charges', 'double_billing', 'shiptax', 'summary_stats', 'datewise_summary']);
-      if (firestoreStatus === 'Data not loaded') {
+      await loadFromTurso(false, ['charges', 'double_billing', 'shiptax', 'summary_stats', 'datewise_summary']);
+      if (dbStatus === 'Data not loaded') {
         return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded. Do not trust totals until this is fixed.' });
       }
       await ensureRawRowsLoaded();
@@ -1143,8 +1143,8 @@ export async function createExpressApp() {
   // Dedicated endpoint for downloading ONLY the Duty/FOB Percentage Sheet
   app.get('/api/export-fob.xlsx', async (req, res) => {
     try {
-      await loadFromFirestore(false, ['charges', 'customer_fob', 'shiptax']);
-      if (firestoreStatus === 'Data not loaded') {
+      await loadFromTurso(false, ['charges', 'customer_fob', 'shiptax']);
+      if (dbStatus === 'Data not loaded') {
         return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded.' });
       }
       await ensureRawRowsLoaded();
@@ -1260,8 +1260,8 @@ export async function createExpressApp() {
   // Export full JSON Backup
   app.get('/api/backup.json', async (req, res) => {
     try {
-      await loadFromFirestore(false, ['shiptax', 'charges', 'double_billing', 'review', 'uploads']);
-      if (firestoreStatus === 'Data not loaded') {
+      await loadFromTurso(false, ['shiptax', 'charges', 'double_billing', 'review', 'uploads']);
+      if (dbStatus === 'Data not loaded') {
         return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded. Do not trust totals until this is fixed.' });
       }
       await ensureRawRowsLoaded();
@@ -1283,7 +1283,7 @@ export async function createExpressApp() {
   // Import JSON Backup
   app.post('/api/restore', upload.single('file'), async (req, res) => {
     try {
-      await loadFromFirestore(false, ['shiptax', 'charges', 'double_billing', 'review', 'uploads']);
+      await loadFromTurso(false, ['shiptax', 'charges', 'double_billing', 'review', 'uploads']);
       if (!req.file) {
         return res.status(400).json({ error: 'No backup file uploaded' });
       }
@@ -1338,7 +1338,7 @@ export async function createExpressApp() {
       })();
       
       // Update persistent cloud database
-      await saveToFirestore(['shiptax', 'charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary']);
+      await saveToTurso(['shiptax', 'charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary']);
       
       res.json({ ok: true });
     } catch (err: any) {

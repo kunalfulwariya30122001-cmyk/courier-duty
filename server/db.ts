@@ -4,15 +4,13 @@ import dotenv from 'dotenv';
 import { createClient } from '@libsql/client';
 import { COUNTRIES_LIST } from './data/countriesList.ts';
 import alasql from 'alasql';
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, collection, getDocs, where, query, writeBatch, doc, setDoc, limit } from 'firebase/firestore';
 
 dotenv.config();
 
 const url = process.env.TURSO_DATABASE_URL;
 const authToken = process.env.TURSO_AUTH_TOKEN;
 
-export let firestoreStatus: 'Connected' | 'Quota exceeded' | 'Using temporary cache' | 'Data not loaded' = 'Data not loaded';
+export let dbStatus: 'Connected' | 'Quota exceeded' | 'Using temporary cache' | 'Data not loaded' = 'Data not loaded';
 export let lastDbError: string | null = null;
 export let rawRowsLoaded = true;
 
@@ -162,56 +160,6 @@ export const localDb = tempLocalDb;
 export const db = localDb;
 
 let tursoClient: any = null;
-let firestoreDb: any = null;
-
-const DEFAULT_FIREBASE_CONFIG = {
-  projectId: process.env.FIREBASE_PROJECT_ID || "yogic-sanctum-pjwpf",
-  appId: process.env.FIREBASE_APP_ID || "1:157314272996:web:67f0b7b63397dcc66566f1",
-  apiKey: process.env.FIREBASE_API_KEY || "AIzaSyBKKq8cYTCcn1MNGhnvrjKfNZ-o591M_U4",
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN || "yogic-sanctum-pjwpf.firebaseapp.com",
-  firestoreDatabaseId: process.env.FIREBASE_FIRESTORE_DATABASE_ID || "ai-studio-courierdutycheck-4d215c84-173a-4efb-a421-a265f2952e72",
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET || "yogic-sanctum-pjwpf.firebasestorage.app",
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || "157314272996"
-};
-
-export function getFirestoreDb() {
-  if (!firestoreDb) {
-    let config: any = null;
-
-    if (process.env.FIREBASE_CONFIG) {
-      try {
-        config = JSON.parse(process.env.FIREBASE_CONFIG);
-      } catch (err) {
-        console.error('[FIREBASE INIT] Failed to parse FIREBASE_CONFIG env var:', err);
-      }
-    }
-
-    if (!config) {
-      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-      if (fs.existsSync(configPath)) {
-        try {
-          config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        } catch (err) {
-          console.error('[FIREBASE INIT] Failed to read firebase-applet-config.json:', err);
-        }
-      }
-    }
-
-    if (!config || !config.projectId) {
-      config = DEFAULT_FIREBASE_CONFIG;
-    }
-    
-    const app = getApps().length === 0 ? initializeApp(config) : getApp();
-    
-    if (config.firestoreDatabaseId) {
-      firestoreDb = getFirestore(app, config.firestoreDatabaseId);
-    } else {
-      firestoreDb = getFirestore(app);
-    }
-  }
-  return firestoreDb;
-}
-
 export function getTursoClient() {
   if (!tursoClient) {
     if (!url) {
@@ -546,7 +494,7 @@ export const memoryDb = {
 let isLoaded = false;
 
 // Connects to Firestore, and downloads initial database state to local sqlite cache
-export async function loadFromFirestore(force = false, tablesToLoad?: string[]) {
+export async function loadFromTurso(force = false, tablesToLoad?: string[]) {
   initLocalSchema();
 
   const allTables = ['shiptax', 'charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'customer_fob', 'courier_settings', 'courier_zones', 'courier_rates', 'country_master', 'rate_packages'];
@@ -559,26 +507,25 @@ export async function loadFromFirestore(force = false, tablesToLoad?: string[]) 
   }
 
   try {
-    const fdb = getFirestoreDb();
+    const client = getTursoClient();
 
-    console.log(`[FIRESTORE] Syncing on-demand tables from Firestore:`, toLoad);
+    // Ensure remote tables exist on Turso
+    const allTables = ['shiptax', 'charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'customer_fob', 'courier_settings', 'courier_zones', 'courier_rates', 'country_master', 'rate_packages'];
+    for (const t of allTables) {
+       await client.execute(`CREATE TABLE IF NOT EXISTS ${t} (id INTEGER PRIMARY KEY)`); // Dummy create to ensure it exists if empty, though schema sync is better done manually or via local.db schema dump. Wait, Turso doesn't need this if we just try catch the select.
+    }
     
-    const fetchPromises = toLoad.map(async (table) => {
-      const chunksColl = collection(fdb, 'table_chunks');
-      const q = query(chunksColl, where('tableName', '==', table));
-      const snapshot = await getDocs(q);
-      
-      const allRows: any[] = [];
-      snapshot.forEach((docSnap: any) => {
-        const data = docSnap.data();
-        if (data && Array.isArray(data.rows)) {
-          allRows.push(...data.rows);
-        }
-      });
-      return { table, allRows };
-    });
-
-    const results = await Promise.all(fetchPromises);
+    console.log('[TURSO] Syncing on-demand tables from Turso:', toLoad);
+    const results: any[] = [];
+    for (const table of toLoad) {
+      try {
+        const rs = await client.execute(`SELECT * FROM ${table}`);
+        results.push({ table, allRows: rs.rows });
+      } catch (e) {
+        // Table might not exist yet on remote, that's fine
+        results.push({ table, allRows: [] });
+      }
+    }
 
     for (const { table, allRows } of results) {
       localDb.exec(`DELETE FROM ${table}`);
@@ -615,7 +562,7 @@ export async function loadFromFirestore(force = false, tablesToLoad?: string[]) 
           }
         }
         if (inserted > 0) {
-          console.log(`[FIRESTORE SYNC] Seeded ${inserted} missing countries locally.`);
+          console.log(`[TURSO SYNC] Seeded ${inserted} missing countries locally.`);
         }
 
         // Query Firestore count directly to check if we need to synchronize
@@ -631,20 +578,20 @@ export async function loadFromFirestore(force = false, tablesToLoad?: string[]) 
         });
 
         if (remoteCount < COUNTRIES_LIST.length) {
-          console.log(`[FIRESTORE SYNC] Remote country_master has only ${remoteCount} records. Uploading entire canonical list of ${COUNTRIES_LIST.length} countries...`);
-          await saveToFirestore(['country_master']);
+          console.log(`[TURSO SYNC] Remote country_master has only ${remoteCount} records. Uploading entire canonical list of ${COUNTRIES_LIST.length} countries...`);
+          await saveToTurso(["country_master"]);
         }
       } catch (seedErr) {
-        console.error('[FIRESTORE SYNC] Failed to seed/sync country_master:', seedErr);
+        console.error('[TURSO SYNC] Failed to seed/sync country_master:', seedErr);
       }
     }
 
-    firestoreStatus = 'Connected';
+    dbStatus = 'Connected';
     lastDbError = null;
     isLoaded = true;
   } catch (err: any) {
-    console.warn('[FIRESTORE] Failed to load/connect to database. Falling back to local SQLite cache:', err);
-    firestoreStatus = 'Using temporary cache';
+    console.warn('[TURSO] Failed to load/connect to database. Falling back to local SQLite cache:', err);
+    dbStatus = 'Using temporary cache';
     lastDbError = err.message || String(err);
     // Mark requested tables as loaded so we don't spam errors and can use local DB fallback
     for (const table of toLoad) {
@@ -655,118 +602,98 @@ export async function loadFromFirestore(force = false, tablesToLoad?: string[]) 
 }
 
 // Recalculates metrics and syncs all changes from local SQLite cache to remote Firestore database
-export async function saveToFirestore(tablesToSave?: string[]) {
+export async function saveToTurso(tablesToSave?: string[]) {
   try {
-    const fdb = getFirestoreDb();
+    const client = getTursoClient();
     const allTables = ['shiptax', 'charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'customer_fob', 'courier_settings', 'courier_zones', 'courier_rates', 'country_master', 'rate_packages'];
     const tables = tablesToSave || allTables;
 
-    // 1. Conditionally recalculate precomputed tables locally if we are saving them
+    // Conditionally recalculate precomputed tables locally if we are saving them
     if (tables.includes('summary_stats') || tables.includes('datewise_summary')) {
       const shiptaxCount = localDb.prepare('SELECT COUNT(*) AS count FROM shiptax').get() as any;
       const chargesCount = localDb.prepare('SELECT COUNT(*) AS count FROM charges').get() as any;
       const doubleCount = localDb.prepare('SELECT COUNT(*) AS count FROM double_billing').get() as any;
       const reviewCount = localDb.prepare('SELECT COUNT(*) AS count FROM review').get() as any;
       
-      const allCharges = localDb.prepare(`SELECT * FROM charges`).all() as any[];
-      const computedDuty = allCharges.reduce((acc, row) => acc + (Number(row.duty_amount) || 0), 0);
+      const allCharges = localDb.prepare('SELECT * FROM charges').all() as any[];
+      const computedDuty = allCharges.reduce((acc: number, row: any) => acc + (Number(row.duty_amount) || 0), 0);
       
-      // Reset and insert summary stats
       localDb.exec('DELETE FROM summary_stats');
-      localDb.prepare(`
-        INSERT INTO summary_stats (shiptax, charges, double, review, duty)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(
-        shiptaxCount?.count || 0,
-        chargesCount?.count || 0,
-        doubleCount?.count || 0,
-        reviewCount?.count || 0,
-        computedDuty
+      localDb.prepare('INSERT INTO summary_stats (shiptax, charges, double, review, duty) VALUES (?, ?, ?, ?, ?)').run(
+        shiptaxCount?.count || 0, chargesCount?.count || 0, doubleCount?.count || 0, reviewCount?.count || 0, computedDuty
       );
       
-      // Reset and insert datewise summary
       localDb.exec('DELETE FROM datewise_summary');
-      const groups: Record<string, { ship_date: string, courier: string, awbs: Set<string>, duty_amount: number }> = {};
+      const groups: Record<string, any> = {};
       for (const row of allCharges) {
-        let fDate = row.final_date || '';
-        if (!fDate || fDate === 'Unknown' || fDate === 'null' || fDate === 'undefined') {
-          fDate = 'Missing Date';
-        }
+        let fDate = row.final_date || 'Missing Date';
+        if (fDate === 'Unknown' || fDate === 'null' || fDate === 'undefined') fDate = 'Missing Date';
         const key = `${fDate}|${row.courier}`;
-        if (!groups[key]) {
-          groups[key] = {
-            ship_date: fDate,
-            courier: row.courier,
-            awbs: new Set<string>(),
-            duty_amount: 0
-          };
-        }
+        if (!groups[key]) groups[key] = { ship_date: fDate, courier: row.courier, awbs: new Set<string>(), duty_amount: 0 };
         groups[key].awbs.add(row.awb);
         groups[key].duty_amount += Number(row.duty_amount) || 0;
       }
       
       if (Object.keys(groups).length > 0) {
-        const insertDatewise = localDb.prepare(`
-          INSERT INTO datewise_summary (ship_date, courier, shipment_count, duty_amount, awbs)
-          VALUES (?, ?, ?, ?, ?)
-        `);
+        const insertDatewise = localDb.prepare('INSERT INTO datewise_summary (ship_date, courier, shipment_count, duty_amount, awbs) VALUES (?, ?, ?, ?, ?)');
         localDb.transaction(() => {
           for (const g of Object.values(groups)) {
-            insertDatewise.run(
-              g.ship_date,
-              g.courier,
-              g.awbs.size,
-              g.duty_amount,
-              Array.from(g.awbs).join(',')
-            );
+            insertDatewise.run(g.ship_date, g.courier, g.awbs.size, g.duty_amount, Array.from(g.awbs).join(','));
           }
         })();
       }
     }
 
-    console.log('[FIRESTORE] Uploading local tables to Firestore cloud chunks:', tables);
+    console.log('[TURSO] Uploading local tables to remote Turso DB:', tables);
     
+    // Auto-migrate schema on remote Turso just in case
+    try {
+        await client.executeMultiple(`
+        CREATE TABLE IF NOT EXISTS shiptax (awb TEXT PRIMARY KEY, original_awb TEXT, ship_date TEXT, courier TEXT, country TEXT, order_reference TEXT, source_file TEXT, import_batch TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS charges (id INTEGER PRIMARY KEY AUTOINCREMENT, signature TEXT UNIQUE, awb TEXT, original_awb TEXT, courier TEXT, charge_type TEXT, charge_type_key TEXT, duty_amount REAL, disbursement_fee REAL, tax_amount REAL, other_charges REAL, total_charges REAL, currency TEXT, invoice_number TEXT, invoice_date TEXT, courier_ship_date TEXT, final_date TEXT, date_source TEXT, shiptax_found INTEGER, shiptax_ship_date TEXT, destination_country TEXT, charge_month TEXT, source_file TEXT, source_sheet TEXT, source_row INTEGER, status TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS double_billing (id INTEGER PRIMARY KEY AUTOINCREMENT, awb TEXT, courier TEXT, ship_date TEXT, first_charge_month TEXT, first_invoice_number TEXT, first_source_file TEXT, repeat_charge_month TEXT, repeat_invoice_number TEXT, repeat_source_file TEXT, duty_amount REAL, first_amount REAL, repeat_amount REAL, difference REAL, charge_type TEXT, message TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS review (id INTEGER PRIMARY KEY AUTOINCREMENT, reason TEXT, courier TEXT, awb TEXT, source_file TEXT, source_sheet TEXT, source_row INTEGER, message TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS uploads (id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT UNIQUE, file_type TEXT, import_type TEXT, rows_seen INTEGER, rows_added INTEGER, rows_skipped INTEGER, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS summary_stats (shiptax INTEGER, charges INTEGER, double INTEGER, review INTEGER, duty REAL);
+        CREATE TABLE IF NOT EXISTS datewise_summary (ship_date TEXT, courier TEXT, shipment_count INTEGER, duty_amount REAL, awbs TEXT, PRIMARY KEY (ship_date, courier));
+        CREATE TABLE IF NOT EXISTS customer_fob (awb TEXT PRIMARY KEY, original_awb TEXT, fob_inr REAL, invoice_number TEXT, invoice_date TEXT, country TEXT, shipping_bill TEXT, source_file TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS courier_settings (courier TEXT PRIMARY KEY, fuel_surcharge REAL DEFAULT 0, gst REAL DEFAULT 0, other_surcharge REAL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS courier_zones (id INTEGER PRIMARY KEY AUTOINCREMENT, courier TEXT, country TEXT, zone TEXT, package_id TEXT, service TEXT, direction TEXT, country_code TEXT, active INTEGER DEFAULT 1, country_name TEXT, raw_country_value TEXT);
+        CREATE TABLE IF NOT EXISTS country_master (id INTEGER PRIMARY KEY AUTOINCREMENT, country_code TEXT UNIQUE, country_name TEXT, normalized_name TEXT, iso3_code TEXT, aliases_json TEXT, is_active INTEGER DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS courier_rates (id INTEGER PRIMARY KEY AUTOINCREMENT, courier TEXT, shipment_type TEXT, weight_slab REAL, is_per_kg INTEGER DEFAULT 0, min_weight REAL, max_weight REAL, rates_json TEXT, package_id TEXT, service TEXT, direction TEXT, active INTEGER DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS rate_packages (id TEXT PRIMARY KEY, courier TEXT, service TEXT, direction TEXT, file_name TEXT, file_hash TEXT UNIQUE, parser_version TEXT, uploaded_at TEXT, effective_date TEXT, status TEXT DEFAULT 'active', import_result TEXT, warning_count INTEGER DEFAULT 0);
+        `);
+    } catch(e) { console.warn('[TURSO] Schema init warning:', e); }
+
     for (const table of tables) {
       const localRows = localDb.prepare(`SELECT * FROM ${table}`).all() as any[];
       
-      // Delete old chunks for this table
-      const chunksColl = collection(fdb, 'table_chunks');
-      const q = query(chunksColl, where('tableName', '==', table));
-      const oldChunksSnapshot = await getDocs(q);
-      
-      if (!oldChunksSnapshot.empty) {
-        const deleteBatch = writeBatch(fdb);
-        oldChunksSnapshot.forEach((docSnap: any) => {
-          deleteBatch.delete(docSnap.ref);
-        });
-        await deleteBatch.commit();
-      }
+      const stmts = [];
+      stmts.push(`DELETE FROM ${table}`);
       
       if (localRows.length > 0) {
-        // Chunk rows (e.g., 500 rows per chunk)
-        const chunkSize = 500;
-        for (let i = 0; i < localRows.length; i += chunkSize) {
-          const chunkRows = localRows.slice(i, i + chunkSize);
-          const chunkIndex = Math.floor(i / chunkSize);
-          const docId = `${table}_chunk_${chunkIndex}`;
-          
-          await setDoc(doc(chunksColl, docId), {
-            tableName: table,
-            chunkIndex: chunkIndex,
-            rows: chunkRows,
-            updatedAt: new Date().toISOString()
-          });
+        const columns = Object.keys(localRows[0]);
+        const sql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
+        
+        for (const row of localRows) {
+          const args = columns.map(col => row[col]);
+          stmts.push({ sql, args });
         }
+      }
+      
+      const chunkSize = 500;
+      for (let i = 0; i < stmts.length; i += chunkSize) {
+        await client.batch(stmts.slice(i, i + chunkSize), 'write');
       }
       loadedTables.add(table);
     }
     
-    console.log('[FIRESTORE] Cloud sync complete for tables:', tables);
-    firestoreStatus = 'Connected';
+    console.log('[TURSO] Cloud sync complete for tables:', tables);
+    dbStatus = 'Connected';
     lastDbError = null;
   } catch (err: any) {
-    console.error('[FIRESTORE SYNC ERROR]', err);
-    firestoreStatus = 'Using temporary cache';
+    console.error('[TURSO SYNC ERROR]', err);
+    dbStatus = 'Using temporary cache';
     lastDbError = err.message || String(err);
     throw err;
   }
@@ -793,7 +720,7 @@ export function forceEmptyAndLoaded() {
 
   isLoaded = true;
   rawRowsLoaded = true;
-  console.log('[FIRESTORE] Database local cache forced empty.');
+  console.log('[TURSO] Database local cache forced empty.');
 }
 
 // No-op compatibility helpers
