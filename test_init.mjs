@@ -1,4 +1,4 @@
-import { createExpressApp } from './server.ts';
+import { createExpressApp } from './server.js';
 
 async function test() {
   console.log('Starting...');

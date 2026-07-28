@@ -6,14 +6,14 @@ import multer from 'multer';
 import * as XLSX from 'xlsx';
 import dotenv from 'dotenv';
 
-import { db, loadFromTurso, saveToTurso, forceEmptyAndLoaded, dbStatus, lastDbError, rawRowsLoaded, ensureRawRowsLoaded, migrateAndCleanZones } from './server/db.ts';
-import { processShipTaxFile, processCourierFile, processCustomerReportFile } from './server/uploadHandler.ts';
-import { syncFirestoreToLocal, syncLocalToFirestore } from './server/turso.ts';
-import { parseExcelDate, isDHLDuty, isFedExDuty, parseFileBuffer } from './server/parsers.ts';
-import { parseDhl, parseGeneric, normalizeCountry, extractCountryCode } from './server/rateParser.ts';
-import { compareCourierRates } from './server/services/rateComparisonService.ts';
-import { runAutomatedRateDiagnostics, resetCourierRatesSubsystem } from './server/services/rateDiagnosticService.ts';
-import { registerAndActivateRatePackage, getRatePackages, calculateBufferHash } from './server/services/activeRatePackageService.ts';
+import { db, loadFromTurso, saveToTurso, forceEmptyAndLoaded, dbStatus, lastDbError, rawRowsLoaded, ensureRawRowsLoaded, migrateAndCleanZones } from './server/db.js';
+import { processShipTaxFile, processCourierFile, processCustomerReportFile } from './server/uploadHandler.js';
+import { syncFirestoreToLocal, syncLocalToFirestore } from './server/turso.js';
+import { parseExcelDate, isDHLDuty, isFedExDuty, parseFileBuffer } from './server/parsers.js';
+import { parseDhl, parseGeneric, normalizeCountry, extractCountryCode } from './server/rateParser.js';
+import { compareCourierRates } from './server/services/rateComparisonService.js';
+import { runAutomatedRateDiagnostics, resetCourierRatesSubsystem } from './server/services/rateDiagnosticService.js';
+import { registerAndActivateRatePackage, getRatePackages, calculateBufferHash } from './server/services/activeRatePackageService.js';
 
 dotenv.config();
 

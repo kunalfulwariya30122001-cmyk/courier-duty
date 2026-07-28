@@ -1,6 +1,6 @@
 import path from 'path';
 import fs from 'fs';
-import { db, prefetchShiptaxAwbs } from './db.ts';
+import { db, prefetchShiptaxAwbs } from './db.js';
 import {
   normalizeAWB,
   parseExcelDate,
@@ -14,7 +14,7 @@ import {
   parseAmount,
   findBestHeaderRow,
   buildRowObjects
-} from './parsers.ts';
+} from './parsers.js';
 
 export async function processShipTaxFile(
   buffer: Buffer,

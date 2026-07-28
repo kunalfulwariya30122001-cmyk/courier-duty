@@ -3,12 +3,12 @@
  * Part of Courier Rate Comparator
  */
 
-import { calculateDhlRate } from './dhlRateService.ts';
-import type { CourierRateResult } from './dhlRateService.ts';
-import { calculateUpsRate } from './upsRateService.ts';
-import { calculateFedExRate } from './fedexRateService.ts';
-import { calculateBillableWeight } from './billableWeightService.ts';
-import { normalizeCountryInput } from './countryNormalizer.ts';
+import { calculateDhlRate } from './dhlRateService.js';
+import type { CourierRateResult } from './dhlRateService.js';
+import { calculateUpsRate } from './upsRateService.js';
+import { calculateFedExRate } from './fedexRateService.js';
+import { calculateBillableWeight } from './billableWeightService.js';
+import { normalizeCountryInput } from './countryNormalizer.js';
 
 export interface ComparisonResponse {
   actualWeight: number;

@@ -3,10 +3,10 @@
  * Part of Courier Rate Comparator
  */
 
-import { getCountryIsoCode, normalizeCountryName } from './server/services/countryNormalizer.ts';
-import { calculateBillableWeight } from './server/services/billableWeightService.ts';
-import { runAutomatedRateDiagnostics } from './server/services/rateDiagnosticService.ts';
-import { getRatePackages } from './server/services/activeRatePackageService.ts';
+import { getCountryIsoCode, normalizeCountryName } from './server/services/countryNormalizer.js';
+import { calculateBillableWeight } from './server/services/billableWeightService.js';
+import { runAutomatedRateDiagnostics } from './server/services/rateDiagnosticService.js';
+import { getRatePackages } from './server/services/activeRatePackageService.js';
 
 let passedTests = 0;
 let failedTests = 0;

@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { createClient } from '@libsql/client';
-import { COUNTRIES_LIST } from './data/countriesList.ts';
+import { COUNTRIES_LIST } from './data/countriesList.js';
 import alasql from 'alasql';
 
 dotenv.config();
@@ -730,7 +730,7 @@ initLocalSchema();
 
 export async function migrateAndCleanZones() {
   console.log('[MIGRATION] Running country-zone mappings migration and cleanup...');
-  const { resolveCountryCode, getCanonicalCountryName } = await import('./services/countryNormalizer.ts');
+  const { resolveCountryCode, getCanonicalCountryName } = await import('./services/countryNormalizer.js');
   
   try {
     const rows = localDb.prepare('SELECT * FROM courier_zones').all() as any[];

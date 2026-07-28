@@ -3,8 +3,8 @@
  * Part of Courier Rate Comparator
  */
 
-import { db } from '../db.ts';
-import { resolveCountryCode, getCanonicalCountryName } from './countryNormalizer.ts';
+import { db } from '../db.js';
+import { resolveCountryCode, getCanonicalCountryName } from './countryNormalizer.js';
 
 export interface ZoneMatch {
   country: string;

@@ -3,9 +3,9 @@
  * Part of Courier Rate Comparator
  */
 
-import { db } from '../db.ts';
-import { compareCourierRates } from './rateComparisonService.ts';
-import { clearAllRatePackages } from './activeRatePackageService.ts';
+import { db } from '../db.js';
+import { compareCourierRates } from './rateComparisonService.js';
+import { clearAllRatePackages } from './activeRatePackageService.js';
 
 export interface AuditTestCase {
   id: string;

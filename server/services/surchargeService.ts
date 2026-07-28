@@ -3,7 +3,7 @@
  * Part of Courier Rate Comparator
  */
 
-import { db } from '../db.ts';
+import { db } from '../db.js';
 
 export interface SurchargeSettings {
   courier: string;

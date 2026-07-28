@@ -4,8 +4,8 @@
  */
 
 import crypto from 'crypto';
-import { db } from '../db.ts';
-import { normalizeCountryName, getCountryIsoCode, resolveCountryCode, getCanonicalCountryName } from './countryNormalizer.ts';
+import { db } from '../db.js';
+import { normalizeCountryName, getCountryIsoCode, resolveCountryCode, getCanonicalCountryName } from './countryNormalizer.js';
 
 export interface RatePackage {
   id: string;

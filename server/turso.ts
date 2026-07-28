@@ -1,4 +1,4 @@
-import { loadFromTurso, saveToTurso } from './db.ts';
+import { loadFromTurso, saveToTurso } from './db.js';
 
 export async function syncLocalToFirestore(sqliteDb?: any) {
   console.log('[FIREBASE] Syncing local in-memory DB to Firestore...');

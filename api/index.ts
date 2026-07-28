@@ -4,7 +4,7 @@ export default async function handler(req: any, res: any) {
   try {
     if (!appPromise) {
       // Dynamically import to catch top-level initialization errors!
-      const serverModule = await import('../server.ts');
+      const serverModule = await import('../server.js');
       appPromise = serverModule.createExpressApp();
     }
     

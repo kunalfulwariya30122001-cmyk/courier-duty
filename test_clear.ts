@@ -1,4 +1,4 @@
-import { loadFromFirestore, saveToFirestore, clearTable } from './server/db.ts';
+import { loadFromFirestore, saveToFirestore, clearTable } from './server/db.js';
 
 async function test() {
   console.log('Loading from Firestore first...');

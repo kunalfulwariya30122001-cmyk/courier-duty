@@ -3,11 +3,11 @@
  * Part of Courier Rate Comparator
  */
 
-import { resolveCountryZone } from './countryZoneService.ts';
-import { calculateBillableWeight } from './billableWeightService.ts';
-import { resolveRateRow, extractBaseRate } from './rateSlabService.ts';
-import { getSurchargeSettings, computeFinalCharges } from './surchargeService.ts';
-import type { CourierRateResult } from './dhlRateService.ts';
+import { resolveCountryZone } from './countryZoneService.js';
+import { calculateBillableWeight } from './billableWeightService.js';
+import { resolveRateRow, extractBaseRate } from './rateSlabService.js';
+import { getSurchargeSettings, computeFinalCharges } from './surchargeService.js';
+import type { CourierRateResult } from './dhlRateService.js';
 
 /**
  * Calculates rate comparison result specifically for FedEx

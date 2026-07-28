@@ -1,4 +1,4 @@
-import { db } from './server/db.ts';
+import { db } from './server/db.js';
 
 try {
   const rows = db.prepare("SELECT * FROM courier_zones WHERE courier = 'DHL' AND LOWER(country) LIKE 'u%'").all();

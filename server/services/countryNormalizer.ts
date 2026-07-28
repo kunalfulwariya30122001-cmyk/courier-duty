@@ -3,8 +3,8 @@
  * Part of Courier Rate Comparator
  */
 
-import { db } from '../db.ts';
-import { COUNTRIES_LIST } from '../data/countriesList.ts';
+import { db } from '../db.js';
+import { COUNTRIES_LIST } from '../data/countriesList.js';
 
 export interface MasterCountry {
   id?: number;
