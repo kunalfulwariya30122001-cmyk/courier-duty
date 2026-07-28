@@ -111,49 +111,10 @@ class AlasqlDatabase {
   }
 }
 
-let tempLocalDb: any;
 
-let Database: any = null;
-if (!isVercel) {
-  try {
-    Database = eval("require")('better-sqlite3');
-  } catch (err) {
-    console.warn('[DATABASE] better-sqlite3 could not be loaded, using alasql as fallback:', err);
-  }
-} else {
-  console.info('[DATABASE] Running on Vercel: skipping better-sqlite3 loading, using alasql pure JS database.');
-}
 
-if (Database) {
-  try {
-    tempLocalDb = new Database(dbPath);
-    // Verify database integrity on load
-    tempLocalDb.pragma('integrity_check');
-  } catch (err) {
-    console.error('[DATABASE] Failed to initialize database at ' + dbPath + '. Trying fallback...', err);
-    try {
-      if (!isVercel && fs.existsSync(dbPath)) {
-        fs.unlinkSync(dbPath);
-      }
-    } catch (deleteErr) {
-      console.error('[DATABASE] Failed to delete local.db:', deleteErr);
-    }
-    try {
-      tempLocalDb = new Database(dbPath);
-    } catch (fallbackErr) {
-      console.error('[DATABASE] Failed to initialize file-based DB, falling back to :memory:', fallbackErr);
-      try {
-        tempLocalDb = new Database(':memory:');
-      } catch (memErr) {
-        console.error('[DATABASE] Failed to initialize memory-based DB, falling back to alasql:', memErr);
-        tempLocalDb = new AlasqlDatabase();
-      }
-    }
-  }
-} else {
-  console.info('[DATABASE] No better-sqlite3 available. Initializing alasql pure JS database...');
-  tempLocalDb = new AlasqlDatabase();
-}
+console.info('[DATABASE] Initializing alasql pure JS database...');
+const tempLocalDb = new AlasqlDatabase();
 
 // Initialize the local file-based SQLite database
 export const localDb = tempLocalDb;
@@ -509,14 +470,7 @@ export async function loadFromTurso(force = false, tablesToLoad?: string[]) {
   try {
     const client = getTursoClient();
 
-    // Ensure remote tables exist on Turso
     const allTables = ['shiptax', 'charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'customer_fob', 'courier_settings', 'courier_zones', 'courier_rates', 'country_master', 'rate_packages'];
-    
-    // Batch create tables in ONE network request to save time
-    const createStmts = allTables.map(t => `CREATE TABLE IF NOT EXISTS ${t} (id INTEGER PRIMARY KEY)`);
-    try {
-      await client.executeMultiple(createStmts.join('; '));
-    } catch(e) { console.warn('[TURSO] Schema check warning:', e); }
     
     console.log('[TURSO] Syncing on-demand tables from Turso:', toLoad);
     
