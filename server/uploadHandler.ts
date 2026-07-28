@@ -431,20 +431,64 @@ export async function processCourierFile(
         const sDate = shipDateKey ? parseExcelDate(row[shipDateKey]) : '';
         const curr = currencyKey ? String(row[currencyKey] || 'INR').trim() : 'INR';
         const sourceRow = row._source_row;
+        let finalDate = sDate;
+        let dateSource = sDate ? 'Standard File' : '';
+        let shiptaxFound = 0;
+        let shiptaxShipDate = '';
+        let destCountry = '';
+
+        const shiptaxMatch = findShiptaxMatch(normalizedAwb);
+        if (shiptaxMatch) {
+          shiptaxFound = 1;
+          shiptaxShipDate = shiptaxMatch.ship_date || '';
+          if (shiptaxMatch.country) destCountry = shiptaxMatch.country;
+        }
+
+        if (!finalDate && shiptaxShipDate) {
+          finalDate = shiptaxShipDate;
+          dateSource = 'ShipTax';
+        }
+
+        const chargeMonth = targetMonth || (sDate ? sDate.substring(0, 7) : new Date().toISOString().substring(0, 7));
+        const signature = `${cName}|${normalizedAwb}|${invNo}|${dutyAmount}|import_export_duties`;
         
-        insertChargeStmt.run(
-          normalizedAwb,
-          cName,
-          dutyAmount,
-          curr,
-          invNo,
-          sDate,
-          '',
-          fileName,
-          sheet.sheetName,
-          sourceRow,
-          new Date().toISOString()
+        const signatureExists = stmtGetChargeSig.get(signature);
+        if (signatureExists) {
+          stats.skipped++;
+          rowsSkipped++;
+          continue;
+        }
+
+        let rowStatus = 'accepted';
+        if (!finalDate) {
+          rowStatus = 'needs_review';
+          stmtInsertReview.run(
+            'Ship date missing', cName, normalizedAwb, fileName, sheet.sheetName, sourceRow,
+            'Could not find a reliable date from file or ShipTax memory.', new Date().toISOString()
+          );
+          stats.review++;
+        }
+
+        const existingCharge = stmtGetExistingCharge.get(normalizedAwb, cName, 'import_export_duties') as any;
+        if (existingCharge) {
+          const existingMonth = existingCharge.charge_month || 'Unknown Month';
+          const existingInvoice = existingCharge.invoice_number || 'Unknown Invoice';
+          const msgText = `This AWB was already charged in ${existingMonth}/${existingInvoice}/${existingCharge.source_file || 'Unknown'}. It is charged again in ${chargeMonth}/${invNo || 'Unknown'}/${fileName}.`;
+          
+          stmtInsertDoubleBilling.run(
+            normalizedAwb, cName, finalDate || shiptaxShipDate || '', existingMonth, existingInvoice,
+            existingCharge.source_file || '', chargeMonth, invNo, fileName, dutyAmount, 'Duty', msgText, new Date().toISOString()
+          );
+          stats.double++;
+          rowStatus = 'double_billing';
+        }
+
+        stmtInsertCharge.run(
+          signature, normalizedAwb, String(rawAwb || ''), cName, 'Duty', 'import_export_duties',
+          dutyAmount, curr, invNo, '', '', finalDate, dateSource, shiptaxFound, shiptaxShipDate,
+          destCountry, chargeMonth, fileName, sheet.sheetName, sourceRow, rowStatus, new Date().toISOString()
         );
+        stats.added++;
         rowsAdded++;
       }
     } else if (detectedCourier === 'DHL') {
