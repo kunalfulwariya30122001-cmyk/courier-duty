@@ -473,18 +473,51 @@ export async function loadFromTurso(force = false, tablesToLoad?: string[]) {
     const allTables = ['shiptax', 'charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'customer_fob', 'courier_settings', 'courier_zones', 'courier_rates', 'country_master', 'rate_packages'];
     
     console.log('[TURSO] Syncing on-demand tables from Turso:', toLoad);
+
+    // Initialize the remote Turso database schema cleanly before querying!
+    try {
+        await client.executeMultiple(`
+        CREATE TABLE IF NOT EXISTS shiptax (awb TEXT PRIMARY KEY, original_awb TEXT, ship_date TEXT, courier TEXT, country TEXT, order_reference TEXT, source_file TEXT, import_batch TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS charges (id INTEGER PRIMARY KEY AUTOINCREMENT, signature TEXT UNIQUE, awb TEXT, original_awb TEXT, courier TEXT, charge_type TEXT, charge_type_key TEXT, duty_amount REAL, disbursement_fee REAL, tax_amount REAL, other_charges REAL, total_charges REAL, currency TEXT, invoice_number TEXT, invoice_date TEXT, courier_ship_date TEXT, final_date TEXT, date_source TEXT, shiptax_found INTEGER, shiptax_ship_date TEXT, destination_country TEXT, charge_month TEXT, source_file TEXT, source_sheet TEXT, source_row INTEGER, status TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS double_billing (id INTEGER PRIMARY KEY AUTOINCREMENT, awb TEXT, courier TEXT, ship_date TEXT, first_charge_month TEXT, first_invoice_number TEXT, first_source_file TEXT, repeat_charge_month TEXT, repeat_invoice_number TEXT, repeat_source_file TEXT, duty_amount REAL, first_amount REAL, repeat_amount REAL, difference REAL, charge_type TEXT, message TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS review (id INTEGER PRIMARY KEY AUTOINCREMENT, reason TEXT, courier TEXT, awb TEXT, source_file TEXT, source_sheet TEXT, source_row INTEGER, message TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS uploads (id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT UNIQUE, file_type TEXT, import_type TEXT, rows_seen INTEGER, rows_added INTEGER, rows_skipped INTEGER, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS summary_stats (shiptax INTEGER, charges INTEGER, double INTEGER, review INTEGER, duty REAL);
+        CREATE TABLE IF NOT EXISTS datewise_summary (ship_date TEXT, courier TEXT, shipment_count INTEGER, duty_amount REAL, awbs TEXT, PRIMARY KEY (ship_date, courier));
+        CREATE TABLE IF NOT EXISTS customer_fob (awb TEXT PRIMARY KEY, original_awb TEXT, fob_inr REAL, invoice_number TEXT, invoice_date TEXT, country TEXT, shipping_bill TEXT, source_file TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS courier_settings (courier TEXT PRIMARY KEY, fuel_surcharge REAL DEFAULT 0, gst REAL DEFAULT 0, other_surcharge REAL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS courier_zones (id INTEGER PRIMARY KEY AUTOINCREMENT, courier TEXT, country TEXT, zone TEXT, package_id TEXT, service TEXT, direction TEXT, country_code TEXT, active INTEGER DEFAULT 1, country_name TEXT, raw_country_value TEXT);
+        CREATE TABLE IF NOT EXISTS country_master (id INTEGER PRIMARY KEY AUTOINCREMENT, country_code TEXT UNIQUE, country_name TEXT, normalized_name TEXT, iso3_code TEXT, aliases_json TEXT, is_active INTEGER DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS courier_rates (id INTEGER PRIMARY KEY AUTOINCREMENT, courier TEXT, shipment_type TEXT, weight_slab REAL, is_per_kg INTEGER DEFAULT 0, min_weight REAL, max_weight REAL, rates_json TEXT, package_id TEXT, service TEXT, direction TEXT, active INTEGER DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS rate_packages (id TEXT PRIMARY KEY, courier TEXT, service TEXT, direction TEXT, file_name TEXT, file_hash TEXT UNIQUE, parser_version TEXT, uploaded_at TEXT, effective_date TEXT, status TEXT DEFAULT 'active', import_result TEXT, warning_count INTEGER DEFAULT 0);
+        `);
+    } catch(e) { console.warn('[TURSO] Schema init warning:', e); }
     
-    // Parallelize SELECT queries
-    const fetchPromises = toLoad.map(async (table) => {
-      try {
-        const rs = await client.execute(`SELECT * FROM ${table}`);
-        return { table, allRows: rs.rows };
-      } catch (e) {
-        return { table, allRows: [] };
+    // Fetch all tables in a SINGLE network request to prevent Vercel timeouts!
+    const selectStmts = toLoad.map(table => `SELECT * FROM ${table}`);
+    let batchResults: any[] = [];
+    try {
+      batchResults = await client.batch(selectStmts, 'read');
+    } catch (batchErr) {
+      console.warn('[TURSO SYNC] client.batch failed (maybe some tables missing). Falling back to safe sequential fetch.');
+      // Safe fallback: fetch one by one so missing tables don't crash the whole batch
+      for (const table of toLoad) {
+        try {
+          const rs = await client.execute(`SELECT * FROM ${table}`);
+          batchResults.push(rs);
+        } catch (e) {
+          batchResults.push({ rows: [] });
+        }
       }
+    }
+
+    const results = toLoad.map((table, i) => {
+      let allRows: any[] = [];
+      if (batchResults[i] && batchResults[i].rows) {
+        allRows = batchResults[i].rows;
+      }
+      return { table, allRows };
     });
-    
-    const results = await Promise.all(fetchPromises);
 
     for (const { table, allRows } of results) {
       localDb.exec(`DELETE FROM ${table}`);
