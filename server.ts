@@ -508,7 +508,7 @@ export async function createExpressApp() {
     app.get('/api/rates/countries', async (req, res) => {
       try {
         await loadFromTurso(false, ['country_master']);
-        const rows = db.prepare('SELECT country_name FROM country_master WHERE is_active = 1 ORDER BY country_name ASC').all() as any[];
+        const rows = db.prepare('SELECT DISTINCT country_name FROM country_master WHERE is_active = 1 ORDER BY country_name ASC').all() as any[];
         const list = rows.map(r => r.country_name);
         res.json(list);
       } catch (err: any) {
@@ -520,7 +520,7 @@ export async function createExpressApp() {
     app.get('/api/countries', async (req, res) => {
       try {
         await loadFromTurso(false, ['country_master']);
-        const rows = db.prepare('SELECT country_code, country_name, iso3_code FROM country_master WHERE is_active = 1 ORDER BY country_name ASC').all() as any[];
+        const rows = db.prepare('SELECT DISTINCT country_code, country_name, iso3_code FROM country_master WHERE is_active = 1 ORDER BY country_name ASC').all() as any[];
         res.json(rows);
       } catch (err: any) {
         res.status(500).json({ error: err.message });

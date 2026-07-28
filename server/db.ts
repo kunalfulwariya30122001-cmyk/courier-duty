@@ -545,11 +545,13 @@ export async function loadFromTurso(force = false, tablesToLoad?: string[]) {
     // Special logic for canonical country seeding if we loaded country_master
     if (toLoad.includes('country_master')) {
       try {
-        const stmt = localDb.prepare('INSERT OR IGNORE INTO country_master (country_code, country_name, normalized_name, iso3_code, aliases_json, is_active) VALUES (?, ?, ?, ?, ?, 1)');
+        const checkStmt = localDb.prepare('SELECT COUNT(*) as count FROM country_master WHERE country_code = ?');
+        const stmt = localDb.prepare('INSERT INTO country_master (country_code, country_name, normalized_name, iso3_code, aliases_json, is_active) VALUES (?, ?, ?, ?, ?, 1)');
         let inserted = 0;
         for (const c of COUNTRIES_LIST) {
-          const info = stmt.run(c.code, c.name, c.name.toLowerCase(), c.iso3, JSON.stringify(c.aliases));
-          if (info.changes > 0) {
+          const exists = checkStmt.get(c.code) as any;
+          if (!exists || exists.count === 0) {
+            stmt.run(c.code, c.name, c.name.toLowerCase(), c.iso3, JSON.stringify(c.aliases));
             inserted++;
           }
         }
