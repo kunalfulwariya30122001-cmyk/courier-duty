@@ -1867,7 +1867,7 @@ export default function App() {
                   {filteredMemory.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="px-6 py-12 text-center text-slate-400">
-                        No ShipTax records in ledger. Upload ShipTax sheets to create historical memory.
+                        {memorySearch ? "No matching AWB found in memory." : `Ledger contains ${stats.shiptax} records. Enter an exact AWB number above to lookup a shipment.`}
                       </td>
                     </tr>
                   ) : (
