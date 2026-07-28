@@ -394,7 +394,60 @@ export async function processCourierFile(
     let rowsSkipped = 0;
     let missingColumns: string[] = [];
     
-    if (detectedCourier === 'DHL') {
+    if (detectedCourier === 'STANDARD') {
+      const awbKey = findColumn(headerRow, ['awb']);
+      const courierKey = findColumn(headerRow, ['courier']);
+      const invoiceKey = findColumn(headerRow, ['invoicenumber']);
+      const shipDateKey = findColumn(headerRow, ['shipdate']);
+      const dutyAmountKey = findColumn(headerRow, ['dutyamount']);
+      const currencyKey = findColumn(headerRow, ['currency']);
+      
+      if (!awbKey) missingColumns.push('AWB');
+      if (!dutyAmountKey) missingColumns.push('Duty Amount');
+      
+      if (missingColumns.length > 0) {
+        throw new Error(`Required columns missing in Standard Template: ${missingColumns.join(', ')}`);
+      }
+      
+      const rows = buildRowObjects(rawRows, headerIdx);
+      
+      for (const row of rows) {
+        const rawAwb = row[awbKey!];
+        if (!rawAwb) continue;
+        const normalizedAwb = normalizeAWB(rawAwb);
+        if (!normalizedAwb) continue;
+        
+        dutyRowsFound++;
+        
+        const dutyAmtStr = String(row[dutyAmountKey!] || '0');
+        const dutyAmount = parseFloat(dutyAmtStr.replace(/[^0-9.-]+/g, '')) || 0;
+        if (dutyAmount <= 0) {
+          rowsSkipped++;
+          continue;
+        }
+        
+        const cName = courierKey ? String(row[courierKey] || 'Unknown').trim() : 'Unknown';
+        const invNo = invoiceKey ? String(row[invoiceKey] || '').trim() : '';
+        const sDate = shipDateKey ? parseExcelDate(row[shipDateKey]) : '';
+        const curr = currencyKey ? String(row[currencyKey] || 'INR').trim() : 'INR';
+        const sourceRow = row._source_row;
+        
+        insertChargeStmt.run(
+          normalizedAwb,
+          cName,
+          dutyAmount,
+          curr,
+          invNo,
+          sDate,
+          '',
+          fileName,
+          sheet.sheetName,
+          sourceRow,
+          new Date().toISOString()
+        );
+        rowsAdded++;
+      }
+    } else if (detectedCourier === 'DHL') {
       // Check if this is the new detailed CSV format
       const isNewDHL = findColumn(headerRow, ['shipmentnumber', 'xc1name', 'xc1charge']) !== null;
       

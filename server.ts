@@ -213,6 +213,41 @@ export async function createExpressApp() {
     }
   });
 
+  // Download Standardized Courier Template
+  app.get('/api/download/template', (req, res) => {
+    try {
+      const wb = XLSX.utils.book_new();
+      
+      // The exact strict columns our new standardized parser will look for
+      const headers = [
+        ['AWB', 'Courier', 'Invoice Number', 'Ship Date', 'Duty Amount', 'Currency']
+      ];
+      
+      const ws = XLSX.utils.aoa_to_sheet(headers);
+      
+      // Auto-size columns
+      ws['!cols'] = [
+        { wch: 15 }, // AWB
+        { wch: 10 }, // Courier
+        { wch: 15 }, // Invoice Number
+        { wch: 12 }, // Ship Date
+        { wch: 12 }, // Duty Amount
+        { wch: 10 }  // Currency
+      ];
+      
+      XLSX.utils.book_append_sheet(wb, ws, "Standard Courier Template");
+      
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      
+      res.setHeader('Content-Disposition', 'attachment; filename="Courier_Upload_Template.xlsx"');
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.send(buffer);
+    } catch (err: any) {
+      console.error('Template gen error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Upload ShipTax Ledger File(s)
   app.post('/api/upload/shiptax', upload.array('files'), async (req, res) => {
     try {

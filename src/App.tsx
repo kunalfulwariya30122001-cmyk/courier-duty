@@ -986,14 +986,24 @@ export default function App() {
             {/* Box 2: Courier Audit & Duplicate Check */}
             <article className="bg-white border border-slate-200 rounded-2xl shadow-xs p-6 flex flex-col justify-between">
               <div>
-                <div className="flex items-center space-x-2.5 mb-4">
-                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
-                    <Sparkles className="w-5 h-5" />
+                <div className="flex items-center justify-between space-x-2.5 mb-4">
+                  <div className="flex items-center space-x-2.5">
+                    <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                      <Sparkles className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-slate-900">Upload Courier Invoice File</h2>
+                      <p className="text-xs text-slate-500">Detect double billings, audit taxes, and map with ShipTax timelines.</p>
+                    </div>
                   </div>
-                  <div>
-                    <h2 className="text-lg font-bold text-slate-900">Upload Courier Invoice File</h2>
-                    <p className="text-xs text-slate-500">Detect double billings, audit taxes, and map with ShipTax timelines.</p>
-                  </div>
+                  <a 
+                    href="/api/download/template" 
+                    download
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-semibold text-xs rounded-md transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Get Standard Template
+                  </a>
                 </div>
 
                 {/* Courier selection fields */}

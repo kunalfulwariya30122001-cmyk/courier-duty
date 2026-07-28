@@ -411,6 +411,10 @@ export function detectCourierFromRow(row: any): string {
     keys = Object.keys(row).map(k => k.toLowerCase().replace(/[^a-z0-9]/g, ''));
   }
   
+  if (keys.some(k => k === 'courier' && keys.some(k2 => k2 === 'dutyamount'))) {
+    return 'STANDARD';
+  }
+  
   if (keys.some(k => k.includes('fedex') || k.includes('airwaybillchargelabel') || k.includes('chargelabel'))) {
     return 'FedEx';
   }
