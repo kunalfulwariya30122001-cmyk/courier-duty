@@ -78,15 +78,9 @@ export async function processShipTaxFile(
     const insertStmt = db.prepare(`
       INSERT INTO shiptax (awb, original_awb, ship_date, courier, country, order_reference, source_file, import_batch, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(awb) DO UPDATE SET
-        original_awb=excluded.original_awb,
-        ship_date=excluded.ship_date,
-        courier=excluded.courier,
-        country=excluded.country,
-        order_reference=excluded.order_reference,
-        source_file=excluded.source_file,
-        import_batch=excluded.import_batch
     `);
+    
+    const seenAwbs = new Set();
     
     for (const row of rows) {
       const rawAwb = row[awbKey];
@@ -111,6 +105,9 @@ export async function processShipTaxFile(
         continue;
       }
       
+      if (seenAwbs.has(normalizedAwb)) continue;
+      seenAwbs.add(normalizedAwb);
+      
       const shipDate = shipDateKey ? parseExcelDate(row[shipDateKey]) : '';
       const courier = courierKey ? String(row[courierKey] || '').trim() : '';
       const country = countryKey ? String(row[countryKey] || '').trim() : '';
@@ -131,7 +128,8 @@ export async function processShipTaxFile(
 
       // Secondary digit-only insertion for bi-directional AWB matching
       const digitsOnly = normalizedAwb.replace(/[^0-9]/g, '');
-      if (digitsOnly && digitsOnly !== normalizedAwb) {
+      if (digitsOnly && digitsOnly !== normalizedAwb && !seenAwbs.has(digitsOnly)) {
+        seenAwbs.add(digitsOnly);
         insertStmt.run(
           digitsOnly,
           String(rawAwb || ''),
