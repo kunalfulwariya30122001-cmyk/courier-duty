@@ -563,13 +563,10 @@ export async function loadFromFirestore(force = false, tablesToLoad?: string[]) 
 
     console.log(`[FIRESTORE] Syncing on-demand tables from Firestore:`, toLoad);
     
-    for (const table of toLoad) {
-      // Fetch all chunks for this table
+    const fetchPromises = toLoad.map(async (table) => {
       const chunksColl = collection(fdb, 'table_chunks');
       const q = query(chunksColl, where('tableName', '==', table));
       const snapshot = await getDocs(q);
-      
-      localDb.exec(`DELETE FROM ${table}`);
       
       const allRows: any[] = [];
       snapshot.forEach((docSnap: any) => {
@@ -578,6 +575,13 @@ export async function loadFromFirestore(force = false, tablesToLoad?: string[]) 
           allRows.push(...data.rows);
         }
       });
+      return { table, allRows };
+    });
+
+    const results = await Promise.all(fetchPromises);
+
+    for (const { table, allRows } of results) {
+      localDb.exec(`DELETE FROM ${table}`);
       
       if (allRows.length > 0) {
         const columns = Object.keys(allRows[0]);
