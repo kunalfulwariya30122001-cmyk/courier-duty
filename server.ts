@@ -251,10 +251,12 @@ export async function createExpressApp() {
         );
       }
       
-      // Sync local changes to cloud database in the background
-      saveToTurso(['shiptax', 'review', 'uploads', 'summary_stats', 'datewise_summary']).catch(err => {
+      // Sync local changes to cloud database (AWAIT is required on Vercel so the container doesn't freeze!)
+      try {
+        await saveToTurso(['shiptax', 'review', 'uploads', 'summary_stats', 'datewise_summary']);
+      } catch (err) {
         console.error('[BACKGROUND TURSO SYNC ERROR - ShipTax]', err);
-      });
+      }
       
       let message = '';
       if (skippedFiles.length > 0) {
@@ -317,10 +319,12 @@ export async function createExpressApp() {
         );
       }
       
-      // Sync local changes to cloud database in the background
-      saveToTurso(['charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary']).catch(err => {
-        console.error('[BACKGROUND TURSO SYNC ERROR - Courier]', err);
-      });
+      // Sync local changes to cloud database (AWAIT is required on Vercel)
+      try {
+        await saveToTurso(['charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary']);
+      } catch (err) {
+        console.error('[BACKGROUND TURSO SYNC ERROR - Courier Data]', err);
+      }
       
       let message = '';
       if (skippedFiles.length > 0) {
@@ -380,10 +384,12 @@ export async function createExpressApp() {
          );
        }
        
-       // Sync local changes to cloud database in the background
-       saveToTurso(['customer_fob', 'uploads', 'review']).catch(err => {
+       // Sync local changes to cloud database (AWAIT is required on Vercel)
+       try {
+         await saveToTurso(['customer_fob', 'uploads', 'review']);
+       } catch (err) {
          console.error('[BACKGROUND TURSO SYNC ERROR - FOB]', err);
-       });
+       }
        
        let message = '';
        if (skippedFiles.length > 0) {
