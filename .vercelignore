@@ -1,0 +1,6 @@
+# Vercel Ignore List
+.git
+node_modules
+dist
+*.db
+local.db

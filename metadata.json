@@ -1,0 +1,6 @@
+{
+  "name": "Courier Duty Checker",
+  "description": "A professional auditor tool for Harry Fashion to catch courier double billing and prepare datewise duty summaries.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
