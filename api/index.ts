@@ -20,9 +20,8 @@ export default async function handler(req: any, res: any) {
       return res.status(504).json({ error: 'Initialization took more than 8 seconds! Vercel Timeout averted.' });
     }
     return res.status(500).json({
-      error: 'Function crashed during initialization or module load',
+      error: `Initialization Crash: ${err.message} | Stack: ${err.stack}`,
       message: err.message,
-      stack: err.stack,
     });
   }
 }
