@@ -511,21 +511,26 @@ export async function loadFromTurso(force = false, tablesToLoad?: string[]) {
 
     // Ensure remote tables exist on Turso
     const allTables = ['shiptax', 'charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'customer_fob', 'courier_settings', 'courier_zones', 'courier_rates', 'country_master', 'rate_packages'];
-    for (const t of allTables) {
-       await client.execute(`CREATE TABLE IF NOT EXISTS ${t} (id INTEGER PRIMARY KEY)`); // Dummy create to ensure it exists if empty, though schema sync is better done manually or via local.db schema dump. Wait, Turso doesn't need this if we just try catch the select.
-    }
+    
+    // Batch create tables in ONE network request to save time
+    const createStmts = allTables.map(t => `CREATE TABLE IF NOT EXISTS ${t} (id INTEGER PRIMARY KEY)`);
+    try {
+      await client.executeMultiple(createStmts.join('; '));
+    } catch(e) { console.warn('[TURSO] Schema check warning:', e); }
     
     console.log('[TURSO] Syncing on-demand tables from Turso:', toLoad);
-    const results: any[] = [];
-    for (const table of toLoad) {
+    
+    // Parallelize SELECT queries
+    const fetchPromises = toLoad.map(async (table) => {
       try {
         const rs = await client.execute(`SELECT * FROM ${table}`);
-        results.push({ table, allRows: rs.rows });
+        return { table, allRows: rs.rows };
       } catch (e) {
-        // Table might not exist yet on remote, that's fine
-        results.push({ table, allRows: [] });
+        return { table, allRows: [] };
       }
-    }
+    });
+    
+    const results = await Promise.all(fetchPromises);
 
     for (const { table, allRows } of results) {
       localDb.exec(`DELETE FROM ${table}`);
@@ -565,22 +570,16 @@ export async function loadFromTurso(force = false, tablesToLoad?: string[]) {
           console.log(`[TURSO SYNC] Seeded ${inserted} missing countries locally.`);
         }
 
-        // Query Firestore count directly to check if we need to synchronize
-        const chunksColl = collection(fdb, 'table_chunks');
-        const countQuery = query(chunksColl, where('tableName', '==', 'country_master'));
-        const countSnapshot = await getDocs(countQuery);
-        let remoteCount = 0;
-        countSnapshot.forEach((docSnap: any) => {
-          const data = docSnap.data();
-          if (data && Array.isArray(data.rows)) {
-            remoteCount += data.rows.length;
-          }
-        });
+        // Query Turso count directly to check if we need to synchronize
+        try {
+            const rs = await client.execute('SELECT COUNT(*) as count FROM country_master');
+            let remoteCount = rs.rows.length > 0 ? Number(rs.rows[0].count) : 0;
+            if (remoteCount < COUNTRIES_LIST.length) {
+              console.log(`[TURSO SYNC] Remote country_master has only ${remoteCount} records. Uploading entire canonical list of ${COUNTRIES_LIST.length} countries...`);
+              await saveToTurso(["country_master"]);
+            }
+        } catch(e) {}
 
-        if (remoteCount < COUNTRIES_LIST.length) {
-          console.log(`[TURSO SYNC] Remote country_master has only ${remoteCount} records. Uploading entire canonical list of ${COUNTRIES_LIST.length} countries...`);
-          await saveToTurso(["country_master"]);
-        }
       } catch (seedErr) {
         console.error('[TURSO SYNC] Failed to seed/sync country_master:', seedErr);
       }
@@ -676,7 +675,10 @@ export async function saveToTurso(tablesToSave?: string[]) {
         const sql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
         
         for (const row of localRows) {
-          const args = columns.map(col => row[col]);
+          const args = columns.map(col => {
+            let val = row[col];
+            return val === undefined ? null : val;
+          });
           stmts.push({ sql, args });
         }
       }
