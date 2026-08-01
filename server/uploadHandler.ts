@@ -286,67 +286,111 @@ export async function processCourierFile(
     await prefetchShiptaxAwbs(awbList);
   }
   
-  // Precompile prepared statements for maximum performance inside loop
-  const stmtGetShiptax = db.prepare('SELECT * FROM shiptax WHERE awb = ?');
-  const stmtGetShiptaxDigits = db.prepare(`
-    SELECT * FROM shiptax 
-    WHERE REPLACE(
-      REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-      REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-      REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-        UPPER(awb), 
-        'A',''),'B',''),'C',''),'D',''),'E',''),'F',''),'G',''),'H',''),'I',''),'J',''),
-        'K',''),'L',''),'M',''),'N',''),'O',''),'P',''),'Q',''),'R',''),'S',''),'T',''),
-        'U',''),'V',''),'W',''),'X',''),'Y',''),'Z','')
-    ) = ?
-  `);
+  // Precompile Map/Set caches for maximum O(1) performance inside loop
+  const allShiptax = db.prepare('SELECT * FROM shiptax').all() as any[];
+  const shiptaxMap = new Map();
+  const shiptaxOriginalMap = new Map();
+  const shiptaxDigitsMap = new Map();
   
-  function findShiptaxMatch(awb: string): any {
-    if (!awb) return null;
-    let match = stmtGetShiptax.get(awb) as any;
-    if (!match) {
-      const digitsOnly = awb.replace(/[^0-9]/g, '');
-      if (digitsOnly && digitsOnly !== awb) {
-        match = stmtGetShiptax.get(digitsOnly) as any;
-      }
-    }
-    if (!match) {
-      const digitsOnly = awb.replace(/[^0-9]/g, '');
-      if (digitsOnly) {
-        match = stmtGetShiptaxDigits.get(digitsOnly) as any;
-      }
-    }
-    return match;
+  for (const row of allShiptax) {
+    if (row.awb) shiptaxMap.set(row.awb, row);
+    if (row.original_awb) shiptaxOriginalMap.set(row.original_awb, row);
+    const digits = (row.awb || '').replace(/[^0-9]/g, '');
+    if (digits) shiptaxDigitsMap.set(digits, row);
   }
 
-  const stmtGetChargeSig = db.prepare('SELECT 1 FROM charges WHERE signature = ?');
-  const stmtInsertReview = db.prepare(`
+  const allCharges = db.prepare('SELECT signature, awb, courier, charge_type_key, invoice_number, source_file, charge_month, status FROM charges').all() as any[];
+  const sigSet = new Set();
+  const chargeMap = new Map();
+  const invoiceSet = new Set();
+  const crossCourierMap = new Map();
+  
+  for (const row of allCharges) {
+    if (row.signature) sigSet.add(row.signature);
+    if (row.awb && row.courier && row.charge_type_key) {
+      chargeMap.set(`${row.awb}_${row.courier}_${row.charge_type_key}`, row);
+    }
+    if (row.awb && row.invoice_number && row.courier && row.status !== 'double_billing') {
+      invoiceSet.add(`${row.awb}_${row.invoice_number}_${row.courier}`);
+    }
+    if (row.awb && row.courier) {
+      if (!crossCourierMap.has(row.awb)) crossCourierMap.set(row.awb, new Set());
+      crossCourierMap.get(row.awb).add(row.courier);
+    }
+  }
+
+  function findShiptaxMatch(awb: string): any {
+    if (!awb) return null;
+    if (shiptaxMap.has(awb)) return shiptaxMap.get(awb);
+    if (shiptaxOriginalMap.has(awb)) return shiptaxOriginalMap.get(awb);
+    
+    const digitsOnly = awb.replace(/[^0-9]/g, '');
+    if (digitsOnly && digitsOnly !== awb) {
+      if (shiptaxMap.has(digitsOnly)) return shiptaxMap.get(digitsOnly);
+    }
+    if (digitsOnly) {
+      if (shiptaxDigitsMap.has(digitsOnly)) return shiptaxDigitsMap.get(digitsOnly);
+    }
+    return null;
+  }
+
+  // Mock the slow Alasql statements with instant O(1) JS lookups
+  const stmtGetChargeSig = { get: (sig: string) => sigSet.has(sig) ? {1:1} : undefined };
+  
+  const stmtGetExistingCharge = { 
+    get: (awb: string, courier: string, key: string) => chargeMap.get(`${awb}_${courier}_${key}`)
+  };
+  
+  const stmtGetSameInvoice = {
+    get: (awb: string, inv: string, courier: string) => invoiceSet.has(`${awb}_${inv}_${courier}`) ? {1:1} : undefined
+  };
+  
+  const stmtGetCrossCourier = {
+    get: (awb: string, currentCourier: string) => {
+      const couriers = crossCourierMap.get(awb);
+      if (!couriers) return undefined;
+      for (const c of couriers) {
+        if (c !== currentCourier) return { courier: c };
+      }
+      return undefined;
+    }
+  };
+
+  const rawInsertReview = db.prepare(`
     INSERT INTO review (reason, courier, awb, source_file, source_sheet, source_row, message, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const stmtGetExistingCharge = db.prepare(`
-    SELECT * FROM charges 
-    WHERE awb = ? AND courier = ? AND charge_type_key = ? 
-    LIMIT 1
-  `);
-  const stmtGetSameInvoice = db.prepare(`
-    SELECT 1 FROM charges 
-    WHERE awb = ? AND invoice_number = ? AND courier = ? AND status != 'double_billing'
-    LIMIT 1
-  `);
-  const stmtGetCrossCourier = db.prepare(`
-    SELECT * FROM charges 
-    WHERE awb = ? AND courier != ?
-    LIMIT 1
-  `);
-  const stmtInsertDoubleBilling = db.prepare(`
+  const stmtInsertReview = { run: (...args: any[]) => rawInsertReview.run(...args) };
+
+  const rawInsertDoubleBilling = db.prepare(`
     INSERT INTO double_billing (awb, courier, ship_date, first_charge_month, first_invoice_number, first_source_file, repeat_charge_month, repeat_invoice_number, repeat_source_file, duty_amount, charge_type, message, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const stmtInsertCharge = db.prepare(`
+  const stmtInsertDoubleBilling = { run: (...args: any[]) => rawInsertDoubleBilling.run(...args) };
+
+  const rawInsertCharge = db.prepare(`
     INSERT INTO charges (signature, awb, original_awb, courier, charge_type, charge_type_key, duty_amount, currency, invoice_number, invoice_date, courier_ship_date, final_date, date_source, shiptax_found, shiptax_ship_date, destination_country, charge_month, source_file, source_sheet, source_row, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  
+  // Wrap InsertCharge to keep our memory cache perfectly synced for intra-file duplicates
+  const stmtInsertCharge = {
+    run: (...args: any[]) => {
+      const [signature, awb, original_awb, courier, charge_type, charge_type_key, duty_amount, currency, invoice_number, invoice_date, courier_ship_date, final_date, date_source, shiptax_found, shiptax_ship_date, destination_country, charge_month, source_file, source_sheet, source_row, status, created_at] = args;
+      
+      sigSet.add(signature);
+      chargeMap.set(`${awb}_${courier}_${charge_type_key}`, {
+        awb, courier, charge_type_key, charge_month, invoice_number, source_file
+      });
+      if (status !== 'double_billing') {
+        invoiceSet.add(`${awb}_${invoice_number}_${courier}`);
+      }
+      if (!crossCourierMap.has(awb)) crossCourierMap.set(awb, new Set());
+      crossCourierMap.get(awb).add(courier);
+      
+      return rawInsertCharge.run(...args);
+    }
+  };
 
   db.transaction(() => {
     for (const sheet of parsedSheets) {
