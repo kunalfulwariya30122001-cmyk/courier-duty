@@ -657,7 +657,6 @@ export async function saveToTurso(tablesToSave?: string[]) {
       const localRows = localDb.prepare(`SELECT * FROM ${table}`).all() as any[];
       
       const stmts = [];
-      stmts.push(`DELETE FROM ${table}`);
       
       if (localRows.length > 0) {
         const columns = Object.keys(localRows[0]);
@@ -672,10 +671,22 @@ export async function saveToTurso(tablesToSave?: string[]) {
         }
       }
       
-      const chunkSize = 500;
+      // Delete the table contents first in a single remote call
+      await client.execute(`DELETE FROM ${table}`);
+      
+      // Push remaining inserts concurrently with a larger chunk size to save network roundtrips
+      const chunkSize = 1000;
+      const batches = [];
       for (let i = 0; i < stmts.length; i += chunkSize) {
-        await client.batch(stmts.slice(i, i + chunkSize), 'write');
+        batches.push(stmts.slice(i, i + chunkSize));
       }
+      
+      // Execute 10 batches at a time (up to 10,000 rows concurrently)
+      for (let i = 0; i < batches.length; i += 10) {
+        const batchSlice = batches.slice(i, i + 10);
+        await Promise.all(batchSlice.map(batch => client.batch(batch, 'write')));
+      }
+      
       loadedTables.add(table);
     }
     
