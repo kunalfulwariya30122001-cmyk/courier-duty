@@ -76,7 +76,7 @@ export async function processShipTaxFile(
     const rows = buildRowObjects(rawRows, headerIdx);
     
     const insertStmt = db.prepare(`
-      INSERT INTO shiptax (awb, original_awb, ship_date, courier, country, order_reference, source_file, import_batch, created_at)
+      REPLACE INTO shiptax (awb, original_awb, ship_date, courier, country, order_reference, source_file, import_batch, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
@@ -911,10 +911,7 @@ export async function processCourierFile(
       
       const rows = buildRowObjects(rawRows, headerIdx);
       
-      const isUS = (c: string) => {
-        const clean = c.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-        return clean === 'us' || clean === 'usa' || clean === 'unitedstates' || clean === 'unitedstatesofamerica';
-      };
+      
       
       for (const row of rows) {
         const sourceRow = row._source_row;
@@ -965,13 +962,7 @@ export async function processCourierFile(
           }
         }
         
-        // UPS Rule: Only US/USA/United States destination
-        if (!isUS(destCountry)) {
-          stats.skipped++;
-          rowsSkipped++;
-          continue;
-        }
-        
+        // Removed UPS Rule: Only US/USA/United States destination so it processes all countries globally
         // UPS Rule: date ONLY from ShipTax. Never use UPS invoice date as ship date.
         if (shiptaxShipDate) {
           finalDate = shiptaxShipDate;
