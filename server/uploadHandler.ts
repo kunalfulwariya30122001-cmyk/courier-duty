@@ -20,18 +20,23 @@ export async function processShipTaxFile(
   buffer: Buffer,
   fileName: string,
   batchId: string
-): Promise<{ added: number; updated: number; review: number }> {
+): Promise<{ stats: { added: number; updated: number; review: number }, newShiptaxRows: any[], newReviewRows: any[] }> {
   let stats = { added: 0, updated: 0, review: 0 };
+  const newShiptaxRows: any[] = [];
+  const newReviewRows: any[] = [];
+
   
   if (fileName.toLowerCase().endsWith('.zip')) {
     const zipFiles = await extractZipFiles(buffer);
     for (const zf of zipFiles) {
-      const zfStats = await processShipTaxFile(zf.data, zf.name, batchId);
-      stats.added += zfStats.added;
-      stats.updated += zfStats.updated;
-      stats.review += zfStats.review;
+      const zfResult = await processShipTaxFile(zf.data, zf.name, batchId);
+      stats.added += zfResult.stats.added;
+      stats.updated += zfResult.stats.updated;
+      stats.review += zfResult.stats.review;
+      newShiptaxRows.push(...zfResult.newShiptaxRows);
+      newReviewRows.push(...zfResult.newReviewRows);
     }
-    return stats;
+    return { stats, newShiptaxRows, newReviewRows };
   }
   
   const parsedSheets = parseFileBuffer(buffer, fileName);
@@ -114,6 +119,7 @@ export async function processShipTaxFile(
       const country = countryKey ? String(row[countryKey] || '').trim() : '';
       const orderRef = orderRefKey ? String(row[orderRefKey] || '').trim() : '';
       
+      const ts = new Date().toISOString();
       deleteStmt.run(normalizedAwb);
       insertStmt.run(
         normalizedAwb,
@@ -124,9 +130,12 @@ export async function processShipTaxFile(
         orderRef,
         fileName,
         batchId,
-        new Date().toISOString()
+        ts
       );
       stats.added++;
+      newShiptaxRows.push({
+        awb: normalizedAwb, original_awb: String(rawAwb || ''), ship_date: shipDate, courier, country, order_reference: orderRef, source_file: fileName, import_batch: batchId, created_at: ts
+      });
 
       // Secondary digit-only insertion for bi-directional AWB matching
       const digitsOnly = normalizedAwb.replace(/[^0-9]/g, '');
@@ -142,13 +151,16 @@ export async function processShipTaxFile(
           orderRef,
           fileName,
           batchId,
-          new Date().toISOString()
+          ts
         );
+        newShiptaxRows.push({
+          awb: digitsOnly, original_awb: String(rawAwb || ''), ship_date: shipDate, courier, country, order_reference: orderRef, source_file: fileName, import_batch: batchId, created_at: ts
+        });
       }
     }
   }
   
-  return stats;
+  return { stats, newShiptaxRows, newReviewRows };
 }
 
 export interface SheetDebugInfo {
@@ -243,21 +255,27 @@ export async function processCourierFile(
   fileName: string,
   selectedCourier: string,
   targetMonth: string
-): Promise<{ added: number; double: number; skipped: number; review: number; debug: SheetDebugInfo[] }> {
+): Promise<{ stats: { added: number; double: number; skipped: number; review: number }; debug: SheetDebugInfo[]; newChargesRows: any[]; newReviewRows: any[]; newDoubleRows: any[] }> {
   let stats = { added: 0, double: 0, skipped: 0, review: 0 };
   let debugReports: SheetDebugInfo[] = [];
+  const newChargesRows: any[] = [];
+  const newReviewRows: any[] = [];
+  const newDoubleRows: any[] = [];
   
   if (fileName.toLowerCase().endsWith('.zip')) {
     const zipFiles = await extractZipFiles(buffer);
     for (const zf of zipFiles) {
       const zfStats = await processCourierFile(zf.data, zf.name, selectedCourier, targetMonth);
-      stats.added += zfStats.added;
-      stats.double += zfStats.double;
-      stats.skipped += zfStats.skipped;
-      stats.review += zfStats.review;
+      stats.added += zfStats.stats.added;
+      stats.double += zfStats.stats.double;
+      stats.skipped += zfStats.stats.skipped;
+      stats.review += zfStats.stats.review;
       debugReports = debugReports.concat(zfStats.debug);
+      newChargesRows.push(...zfStats.newChargesRows);
+      newReviewRows.push(...zfStats.newReviewRows);
+      newDoubleRows.push(...zfStats.newDoubleRows);
     }
-    return { ...stats, debug: debugReports };
+    return { stats, debug: debugReports, newChargesRows, newReviewRows, newDoubleRows };
   }
   
   const parsedSheets = parseFileBuffer(buffer, fileName);
@@ -1252,7 +1270,11 @@ export async function processCourierFile(
   }
   })();
   
-  return { ...stats, debug: debugReports };
+  newChargesRows.push(...(db.prepare('SELECT * FROM charges WHERE source_file = ?').all(fileName) as any[]));
+  newDoubleRows.push(...(db.prepare('SELECT * FROM double_billing WHERE repeat_source_file = ? OR first_source_file = ?').all(fileName, fileName) as any[]));
+  newReviewRows.push(...(db.prepare('SELECT * FROM review WHERE source_file = ?').all(fileName) as any[]));
+  
+  return { stats, debug: debugReports, newChargesRows, newReviewRows, newDoubleRows };
 }
 
 export function normalizeCustomerHeader(h: any): string {

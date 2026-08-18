@@ -702,6 +702,43 @@ export async function saveToTurso(tablesToSave?: string[]) {
   }
 }
 
+export async function syncDeltaToTurso(table: string, rows: any[]) {
+  if (!tursoUrl || !tursoToken) return;
+  if (rows.length === 0) return;
+
+  try {
+    const columns = Object.keys(rows[0]);
+    const chunkSize = 1000;
+    const bulkStmts = [];
+    
+    for (let i = 0; i < rows.length; i += chunkSize) {
+      const chunk = rows.slice(i, i + chunkSize);
+      const placeholders = chunk.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ');
+      // Use INSERT OR REPLACE to seamlessly overwrite existing AWBs without constraint errors
+      const sql = `INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES ${placeholders}`;
+      
+      const args: any[] = [];
+      for (const row of chunk) {
+        for (const col of columns) {
+          const val = row[col];
+          args.push(val === undefined ? null : val);
+        }
+      }
+      bulkStmts.push({ sql, args });
+    }
+    
+    // Group the bulk statements into transaction batches of 5
+    for (let i = 0; i < bulkStmts.length; i += 5) {
+      await client.batch(bulkStmts.slice(i, i + 5), 'write');
+    }
+    
+    console.log(`[TURSO DELTA SYNC] Synced ${rows.length} rows to ${table} instantly.`);
+  } catch (err: any) {
+    console.error(`[TURSO DELTA SYNC ERROR] ${table}:`, err);
+    throw err;
+  }
+}
+
 export function forceEmptyAndLoaded() {
   initLocalSchema();
   const tables = ['shiptax', 'charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary', 'customer_fob', 'courier_settings', 'courier_zones', 'courier_rates', 'country_master', 'rate_packages'];

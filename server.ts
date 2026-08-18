@@ -267,10 +267,10 @@ export async function createExpressApp() {
         db.prepare('DELETE FROM review WHERE source_file = ?').run(file.originalname);
         db.prepare('DELETE FROM uploads WHERE LOWER(file_name) = ?').run(file.originalname.toLowerCase());
 
-        const stats = await processShipTaxFile(file.buffer, file.originalname, batchId);
-        totalStats.added += stats.added;
-        totalStats.updated += stats.updated;
-        totalStats.review += stats.review;
+        const result = await processShipTaxFile(file.buffer, file.originalname, batchId);
+        totalStats.added += result.stats.added;
+        totalStats.updated += result.stats.updated;
+        totalStats.review += result.stats.review;
         
         db.prepare(`
           INSERT INTO uploads (file_name, file_type, import_type, rows_seen, rows_added, rows_skipped, created_at)
@@ -279,18 +279,34 @@ export async function createExpressApp() {
           file.originalname,
           path.extname(file.originalname),
           'ShipTax',
-          stats.added + stats.updated + stats.review,
-          stats.added,
-          stats.updated,
+          result.stats.added + result.stats.updated + result.stats.review,
+          result.stats.added,
+          result.stats.updated,
           new Date().toISOString()
         );
+        
+        // Sync newly added rows directly to Turso (Delta Sync) instead of dumping 50,000 rows
+        try {
+          const { syncDeltaToTurso } = await import('./server/db.js');
+          await syncDeltaToTurso('shiptax', result.newShiptaxRows);
+          await syncDeltaToTurso('review', result.newReviewRows);
+          
+          // Also sync the uploads table
+          const newUploadRow = db.prepare('SELECT * FROM uploads WHERE file_name = ?').get(file.originalname) as any;
+          if (newUploadRow) {
+             await syncDeltaToTurso('uploads', [newUploadRow]);
+          }
+        } catch (err) {
+          console.error('[DELTA TURSO SYNC ERROR - ShipTax]', err);
+        }
       }
       
-      // Sync local changes to cloud database (AWAIT is required on Vercel so the container doesn't freeze!)
+      // We no longer need full saveToTurso for shiptax/charges. We just sync the tiny summary tables!
       try {
-        await saveToTurso(['shiptax', 'review', 'uploads', 'summary_stats', 'datewise_summary']);
+        const { saveToTurso } = await import('./server/db.js');
+        await saveToTurso(['summary_stats', 'datewise_summary']);
       } catch (err) {
-        console.error('[BACKGROUND TURSO SYNC ERROR - ShipTax]', err);
+        console.error('[BACKGROUND TURSO SYNC ERROR - Summaries]', err);
       }
       
       let message = '';
@@ -331,13 +347,13 @@ export async function createExpressApp() {
         db.prepare('DELETE FROM review WHERE source_file = ?').run(file.originalname);
         db.prepare('DELETE FROM uploads WHERE LOWER(file_name) = ?').run(file.originalname.toLowerCase());
 
-        const stats = await processCourierFile(file.buffer, file.originalname, courier, chargeMonth);
-        totalStats.added += stats.added;
-        totalStats.double += stats.double;
-        totalStats.skipped += stats.skipped;
-        totalStats.review += stats.review;
-        if (stats.debug) {
-          allDebug = allDebug.concat(stats.debug);
+        const result = await processCourierFile(file.buffer, file.originalname, courier, chargeMonth);
+        totalStats.added += result.stats.added;
+        totalStats.double += result.stats.double;
+        totalStats.skipped += result.stats.skipped;
+        totalStats.review += result.stats.review;
+        if (result.debug) {
+          allDebug = allDebug.concat(result.debug);
         }
         
         db.prepare(`
@@ -347,18 +363,32 @@ export async function createExpressApp() {
           file.originalname,
           path.extname(file.originalname),
           'Courier',
-          stats.added + stats.double + stats.skipped + stats.review,
-          stats.added,
-          stats.skipped,
+          result.stats.added + result.stats.double + result.stats.skipped + result.stats.review,
+          result.stats.added,
+          result.stats.skipped,
           new Date().toISOString()
         );
+        
+        try {
+          const { syncDeltaToTurso } = await import('./server/db.js');
+          await syncDeltaToTurso('charges', result.newChargesRows);
+          await syncDeltaToTurso('double_billing', result.newDoubleRows);
+          await syncDeltaToTurso('review', result.newReviewRows);
+          
+          const newUploadRow = db.prepare('SELECT * FROM uploads WHERE file_name = ?').get(file.originalname) as any;
+          if (newUploadRow) {
+             await syncDeltaToTurso('uploads', [newUploadRow]);
+          }
+        } catch (err) {
+          console.error('[DELTA TURSO SYNC ERROR - Courier]', err);
+        }
       }
       
-      // Sync local changes to cloud database (AWAIT is required on Vercel)
       try {
-        await saveToTurso(['charges', 'double_billing', 'review', 'uploads', 'summary_stats', 'datewise_summary']);
+        const { saveToTurso } = await import('./server/db.js');
+        await saveToTurso(['summary_stats', 'datewise_summary']);
       } catch (err) {
-        console.error('[BACKGROUND TURSO SYNC ERROR - Courier Data]', err);
+        console.error('[BACKGROUND TURSO SYNC ERROR - Courier Summaries]', err);
       }
       
       let message = '';

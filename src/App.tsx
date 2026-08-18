@@ -332,29 +332,46 @@ export default function App() {
       return;
     }
 
-    setShiptaxStatus({ type: 'loading', message: 'Processing ShipTax records...' });
-    const formData = new FormData();
-    shiptaxFiles.forEach(file => formData.append('files', file));
+    setShiptaxStatus({ type: 'loading', message: `Processing file 1 of ${shiptaxFiles.length}...` });
+    
+    let totalAdded = 0;
+    let totalReview = 0;
+    let hasError = false;
+    let errorMessage = '';
 
-    try {
-      const res = await fetch('/api/upload/shiptax', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await safeParseJson(res);
-      if (res.ok) {
-        setShiptaxStatus({
-          type: 'success',
-          message: `Successfully processed ShipTax. Added/Updated: ${data.stats.added}. Review Flags: ${data.stats.review}.`
-        });
-        setShiptaxFiles([]);
-        fetchSummary();
-      } else {
-        setShiptaxStatus({ type: 'error', message: data.error || 'Failed to upload ShipTax.' });
+    for (let i = 0; i < shiptaxFiles.length; i++) {
+      setShiptaxStatus({ type: 'loading', message: `Processing ShipTax file ${i + 1} of ${shiptaxFiles.length}...` });
+      const formData = new FormData();
+      formData.append('files', shiptaxFiles[i]);
+
+      try {
+        const res = await fetch('/api/upload/shiptax', { method: 'POST', body: formData });
+        const data = await safeParseJson(res);
+        if (res.ok) {
+          totalAdded += data.stats?.added || 0;
+          totalReview += data.stats?.review || 0;
+        } else {
+          hasError = true;
+          errorMessage = data.error || 'Failed to upload ShipTax.';
+          break;
+        }
+      } catch (err: any) {
+        hasError = true;
+        errorMessage = err.message || 'An error occurred during upload.';
+        break;
       }
-    } catch (err: any) {
-      setShiptaxStatus({ type: 'error', message: err.message || 'An error occurred during upload.' });
     }
+
+    if (!hasError) {
+      setShiptaxStatus({
+        type: 'success',
+        message: `Successfully processed ${shiptaxFiles.length} files. Added/Updated: ${totalAdded}. Review Flags: ${totalReview}.`
+      });
+      setShiptaxFiles([]);
+    } else {
+      setShiptaxStatus({ type: 'error', message: errorMessage });
+    }
+    fetchSummary();
   };
 
   // Submit Courier Monthly Invoice File(s)
@@ -364,35 +381,56 @@ export default function App() {
       return;
     }
 
-    setCourierStatus({ type: 'loading', message: 'Running audit checks...' });
-    const formData = new FormData();
-    courierFiles.forEach(file => formData.append('files', file));
-    formData.append('courier', selectedCourier);
-    formData.append('charge_month', chargeMonth);
+    setCourierStatus({ type: 'loading', message: `Running audit checks for file 1 of ${courierFiles.length}...` });
+    
+    let totalAdded = 0;
+    let totalDouble = 0;
+    let totalSkipped = 0;
+    let totalReview = 0;
+    let allDebug: any[] = [];
+    let hasError = false;
+    let errorMessage = '';
 
-    try {
-      const res = await fetch('/api/upload/courier', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await safeParseJson(res);
-      if (res.ok) {
-        const doubleCount = data.stats.double || 0;
-        setCourierStatus({
-          type: doubleCount > 0 ? 'error' : 'success',
-          message: `Audit complete. Added Charges: ${data.stats.added}, Double Billings Caught: ${doubleCount}, Skipped Row Re-uploads: ${data.stats.skipped}, Review Row Logs: ${data.stats.review}`
-        });
-        setCourierDebug(data.debug || []);
-        setCourierFiles([]);
-        fetchSummary();
-      } else {
-        setCourierStatus({ type: 'error', message: data.error || 'Failed to complete Courier Audit.' });
-        setCourierDebug([]);
+    for (let i = 0; i < courierFiles.length; i++) {
+      setCourierStatus({ type: 'loading', message: `Running audit checks for file ${i + 1} of ${courierFiles.length}...` });
+      const formData = new FormData();
+      formData.append('files', courierFiles[i]);
+      formData.append('courier', selectedCourier);
+      formData.append('charge_month', chargeMonth);
+
+      try {
+        const res = await fetch('/api/upload/courier', { method: 'POST', body: formData });
+        const data = await safeParseJson(res);
+        if (res.ok) {
+          totalAdded += data.stats?.added || 0;
+          totalDouble += data.stats?.double || 0;
+          totalSkipped += data.stats?.skipped || 0;
+          totalReview += data.stats?.review || 0;
+          if (data.debug) allDebug = allDebug.concat(data.debug);
+        } else {
+          hasError = true;
+          errorMessage = data.error || 'Failed to complete Courier Audit.';
+          break;
+        }
+      } catch (err: any) {
+        hasError = true;
+        errorMessage = err.message || 'An error occurred during audit execution.';
+        break;
       }
-    } catch (err: any) {
-      setCourierStatus({ type: 'error', message: err.message || 'An error occurred during audit execution.' });
+    }
+
+    if (!hasError) {
+      setCourierStatus({
+        type: totalDouble > 0 ? 'error' : 'success',
+        message: `Audit complete for ${courierFiles.length} files. Added Charges: ${totalAdded}, Double Billings Caught: ${totalDouble}, Skipped: ${totalSkipped}, Review Logs: ${totalReview}`
+      });
+      setCourierDebug(allDebug);
+      setCourierFiles([]);
+    } else {
+      setCourierStatus({ type: 'error', message: errorMessage });
       setCourierDebug([]);
     }
+    fetchSummary();
   };
 
   const handleFobUpload = async () => {
@@ -401,30 +439,49 @@ export default function App() {
       return;
     }
 
-    setFobStatus({ type: 'loading', message: 'Processing Customer Report & FOB records...' });
-    const formData = new FormData();
-    fobFiles.forEach(file => formData.append('files', file));
+    setFobStatus({ type: 'loading', message: `Processing FOB file 1 of ${fobFiles.length}...` });
+    
+    let totalAdded = 0;
+    let totalUpdated = 0;
+    let totalReview = 0;
+    let hasError = false;
+    let errorMessage = '';
 
-    try {
-      const res = await fetch('/api/upload/fob', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await safeParseJson(res);
-      if (res.ok) {
-        setFobStatus({
-          type: 'success',
-          message: `Successfully processed FOB records. Added: ${data.stats.added}. Updated: ${data.stats.updated}. Review flags: ${data.stats.review}`
-        });
-        setFobFiles([]);
-        fetchSummary();
-        fetchFobReport();
-      } else {
-        setFobStatus({ type: 'error', message: data.error || 'Failed to upload Customer FOB report.' });
+    for (let i = 0; i < fobFiles.length; i++) {
+      setFobStatus({ type: 'loading', message: `Processing FOB file ${i + 1} of ${fobFiles.length}...` });
+      const formData = new FormData();
+      formData.append('files', fobFiles[i]);
+
+      try {
+        const res = await fetch('/api/upload/fob', { method: 'POST', body: formData });
+        const data = await safeParseJson(res);
+        if (res.ok) {
+          totalAdded += data.stats?.added || 0;
+          totalUpdated += data.stats?.updated || 0;
+          totalReview += data.stats?.review || 0;
+        } else {
+          hasError = true;
+          errorMessage = data.error || 'Failed to upload Customer FOB report.';
+          break;
+        }
+      } catch (err: any) {
+        hasError = true;
+        errorMessage = err.message || 'An error occurred during FOB upload.';
+        break;
       }
-    } catch (err: any) {
-      setFobStatus({ type: 'error', message: err.message || 'An error occurred during FOB upload.' });
     }
+
+    if (!hasError) {
+      setFobStatus({
+        type: 'success',
+        message: `Successfully processed ${fobFiles.length} FOB records. Added: ${totalAdded}. Updated: ${totalUpdated}. Review flags: ${totalReview}`
+      });
+      setFobFiles([]);
+      fetchFobReport();
+    } else {
+      setFobStatus({ type: 'error', message: errorMessage });
+    }
+    fetchSummary();
   };
 
   // Restore DB backup
