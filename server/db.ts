@@ -656,29 +656,36 @@ export async function saveToTurso(tablesToSave?: string[]) {
     for (const table of tables) {
       const localRows = localDb.prepare(`SELECT * FROM ${table}`).all() as any[];
       
-      const stmts = [];
-      
-      if (localRows.length > 0) {
-        const columns = Object.keys(localRows[0]);
-        const sql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`;
-        
-        for (const row of localRows) {
-          const args = columns.map(col => {
-            let val = row[col];
-            return val === undefined ? null : val;
-          });
-          stmts.push({ sql, args });
-        }
-      }
-      
       // Delete the table contents first in a single remote call
       await client.execute(`DELETE FROM ${table}`);
       
-      // Push remaining inserts sequentially with a large chunk size to save network roundtrips 
-      // (MUST be sequential to prevent SQLITE_BUSY Database Locked errors on Turso)
-      const chunkSize = 2000;
-      for (let i = 0; i < stmts.length; i += chunkSize) {
-        await client.batch(stmts.slice(i, i + chunkSize), 'write');
+      if (localRows.length > 0) {
+        const columns = Object.keys(localRows[0]);
+        
+        // Multi-value bulk inserts are incredibly fast. We chunk by 1000 rows to stay well under SQLite's parameter limit.
+        const chunkSize = 1000;
+        const bulkStmts = [];
+        
+        for (let i = 0; i < localRows.length; i += chunkSize) {
+          const chunk = localRows.slice(i, i + chunkSize);
+          // Create the (?, ?, ?) string for each row in the chunk
+          const placeholders = chunk.map(() => `(${columns.map(() => '?').join(', ')})`).join(', ');
+          const sql = `INSERT OR IGNORE INTO ${table} (${columns.join(', ')}) VALUES ${placeholders}`;
+          
+          const args = [];
+          for (const row of chunk) {
+            for (const col of columns) {
+              const val = row[col];
+              args.push(val === undefined ? null : val);
+            }
+          }
+          bulkStmts.push({ sql, args });
+        }
+        
+        // Group the bulk statements into transaction batches of 5 to send 5,000 rows per HTTP roundtrip
+        for (let i = 0; i < bulkStmts.length; i += 5) {
+          await client.batch(bulkStmts.slice(i, i + 5), 'write');
+        }
       }
       
       loadedTables.add(table);
