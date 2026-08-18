@@ -1604,5 +1604,8 @@ export async function processCustomerReportFile(
     }
   }
   
-  return stats;
+  const newFobRows = db.prepare('SELECT * FROM customer_fob WHERE source_file = ?').all(fileName) as any[];
+  const newReviewRows = db.prepare('SELECT * FROM review WHERE source_file = ?').all(fileName) as any[];
+  
+  return { stats, newFobRows, newReviewRows };
 }

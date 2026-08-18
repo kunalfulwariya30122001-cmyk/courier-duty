@@ -430,30 +430,44 @@ export async function createExpressApp() {
            continue;
          }
  
-         const stats = await processCustomerReportFile(file.buffer, file.originalname);
+         const { stats, newFobRows, newReviewRows } = await processCustomerReportFile(file.buffer, file.originalname);
          totalStats.added += stats.added;
          totalStats.updated += stats.updated;
          totalStats.review += stats.review;
          
+         const newUploadRow = {
+           file_name: file.originalname,
+           file_type: path.extname(file.originalname),
+           import_type: 'Customer Report',
+           rows_seen: stats.added + stats.updated + stats.review,
+           rows_added: stats.added,
+           rows_skipped: stats.updated,
+           created_at: new Date().toISOString()
+         };
+
          db.prepare(`
            INSERT INTO uploads (file_name, file_type, import_type, rows_seen, rows_added, rows_skipped, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)
          `).run(
-           file.originalname,
-           path.extname(file.originalname),
-           'Customer Report',
-           stats.added + stats.updated + stats.review,
-           stats.added,
-           stats.updated,
-           new Date().toISOString()
+           newUploadRow.file_name,
+           newUploadRow.file_type,
+           newUploadRow.import_type,
+           newUploadRow.rows_seen,
+           newUploadRow.rows_added,
+           newUploadRow.rows_skipped,
+           newUploadRow.created_at
          );
-       }
-       
-       // Sync local changes to cloud database (AWAIT is required on Vercel)
-       try {
-         await saveToTurso(['customer_fob', 'uploads', 'review']);
-       } catch (err) {
-         console.error('[BACKGROUND TURSO SYNC ERROR - FOB]', err);
+         
+         try {
+           const { syncDeltaToTurso } = await import('./server/db.js');
+           await syncDeltaToTurso('customer_fob', newFobRows);
+           if (newReviewRows.length > 0) {
+              await syncDeltaToTurso('review', newReviewRows);
+           }
+           await syncDeltaToTurso('uploads', [newUploadRow]);
+         } catch (err) {
+           console.error('[BACKGROUND TURSO SYNC ERROR - FOB]', err);
+         }
        }
        
        let message = '';
@@ -856,7 +870,7 @@ export async function createExpressApp() {
        }
        
        const charges = db.prepare('SELECT * FROM charges ORDER BY final_date DESC, created_at DESC').all() as any[];
-       const fobs = db.prepare('SELECT * FROM customer_fob WHERE awb = original_awb').all() as any[];
+       const fobs = db.prepare('SELECT * FROM customer_fob').all() as any[];
        const shiptaxes = db.prepare('SELECT awb, original_awb, order_reference FROM shiptax').all() as any[];
        
        // Build maps for fast O(1) bi-directional lookups
@@ -996,7 +1010,7 @@ export async function createExpressApp() {
        if (dbStatus === 'Data not loaded') {
          return res.status(503).json({ error: 'Cloud database unavailable or quota exceeded.' });
        }
-       const fobs = db.prepare('SELECT * FROM customer_fob WHERE awb = original_awb ORDER BY created_at DESC').all() as any[];
+       const fobs = db.prepare('SELECT * FROM customer_fob ORDER BY created_at DESC').all() as any[];
        res.json(fobs);
      } catch (err: any) {
        res.status(500).json({ error: err.message });
