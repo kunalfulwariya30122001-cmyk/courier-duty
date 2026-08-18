@@ -75,8 +75,9 @@ export async function processShipTaxFile(
     
     const rows = buildRowObjects(rawRows, headerIdx);
     
+    const deleteStmt = db.prepare(`DELETE FROM shiptax WHERE awb = ?`);
     const insertStmt = db.prepare(`
-      REPLACE INTO shiptax (awb, original_awb, ship_date, courier, country, order_reference, source_file, import_batch, created_at)
+      INSERT INTO shiptax (awb, original_awb, ship_date, courier, country, order_reference, source_file, import_batch, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
@@ -113,6 +114,7 @@ export async function processShipTaxFile(
       const country = countryKey ? String(row[countryKey] || '').trim() : '';
       const orderRef = orderRefKey ? String(row[orderRefKey] || '').trim() : '';
       
+      deleteStmt.run(normalizedAwb);
       insertStmt.run(
         normalizedAwb,
         String(rawAwb || ''),
@@ -130,6 +132,7 @@ export async function processShipTaxFile(
       const digitsOnly = normalizedAwb.replace(/[^0-9]/g, '');
       if (digitsOnly && digitsOnly !== normalizedAwb && !seenAwbs.has(digitsOnly)) {
         seenAwbs.add(digitsOnly);
+        deleteStmt.run(digitsOnly);
         insertStmt.run(
           digitsOnly,
           String(rawAwb || ''),
