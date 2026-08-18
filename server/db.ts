@@ -674,17 +674,11 @@ export async function saveToTurso(tablesToSave?: string[]) {
       // Delete the table contents first in a single remote call
       await client.execute(`DELETE FROM ${table}`);
       
-      // Push remaining inserts concurrently with a larger chunk size to save network roundtrips
-      const chunkSize = 1000;
-      const batches = [];
+      // Push remaining inserts sequentially with a large chunk size to save network roundtrips 
+      // (MUST be sequential to prevent SQLITE_BUSY Database Locked errors on Turso)
+      const chunkSize = 2000;
       for (let i = 0; i < stmts.length; i += chunkSize) {
-        batches.push(stmts.slice(i, i + chunkSize));
-      }
-      
-      // Execute 10 batches at a time (up to 10,000 rows concurrently)
-      for (let i = 0; i < batches.length; i += 10) {
-        const batchSlice = batches.slice(i, i + 10);
-        await Promise.all(batchSlice.map(batch => client.batch(batch, 'write')));
+        await client.batch(stmts.slice(i, i + chunkSize), 'write');
       }
       
       loadedTables.add(table);
